@@ -23,7 +23,9 @@ jobs:
           command: "tar -xzf nginx-1.23.3.tar.gz"
       - run:
           name: "Install nginx dependencies"
-          command: "sudo apt-get install libpcre3 libpcre3-dev zlib1g zlib1g-dev libssl-dev libgd-dev libxml2 libxml2-dev uuid-dev"
+          command: |
+            sudo apt-get update -y
+            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev"
       - run:
           name: "Configure nginx"
           command: "./configure --add-module=../akita"
