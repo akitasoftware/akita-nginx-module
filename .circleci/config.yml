@@ -25,7 +25,7 @@ jobs:
           name: "Install nginx dependencies"
           command: |
             sudo apt-get update -y
-            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev"
+            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev
       - run:
           name: "Configure nginx"
           command: "./configure --add-module=../akita"
