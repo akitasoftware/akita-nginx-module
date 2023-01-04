@@ -23,7 +23,7 @@ jobs:
           command: "tar -xzf nginx-1.23.3.tar.gz"
       - run:
           name: "Configure nginx"
-          command: "./configure -add-module=../akita"
+          command: "./configure --add-module=../akita"
           working_directory: "nginx-1.23.3"
       - run:
           name: "Compile"
