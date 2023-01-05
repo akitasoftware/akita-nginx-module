@@ -11,7 +11,7 @@ commands:
         type: string
     steps:
       - run:
-          name: "Download nginx"
+          name: "Download nginx <<parameters.version>>"
           command: "wget http://nginx.org/download/nginx-<<parameters.version>>.tar.gz"          
       - run:
           name: "Unpack nginx"
@@ -21,7 +21,7 @@ commands:
           command: "./configure --add-module=../akita"
           working_directory: "nginx-<<parameters.version>>"
       - run:
-          name: "Compile"
+          name: "Compile <<parameters.version>>"
           command: "make"
           working_directory: "nginx-<<parameters.version>>"      
 
