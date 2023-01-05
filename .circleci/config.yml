@@ -2,6 +2,28 @@
 # See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
+commands:
+  build-nginx:
+    parameters:
+      version:
+        default: "1.23.3"
+        type: string
+    steps:
+      - run:
+          name: "Download nginx"
+          command: "wget http://nginx.org/download/nginx-<<parameters.version>>.tar.gz"          
+      - run:
+          name: "Unpack nginx"
+          command: "tar -xzf nginx-<<parameters.version>>.tar.gz"
+      - run:
+          name: "Configure nginx"
+          command: "./configure --add-module=../akita"
+          working_directory: "nginx-<<parameters.version>>"
+      - run:
+          name: "Compile"
+          command: "make"
+          working_directory: "nginx-<<parameters.version>>"      
+
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
@@ -16,24 +38,17 @@ jobs:
       - checkout:
           path: "akita"
       - run:
-          name: "Download nginx"
-          command: "wget http://nginx.org/download/nginx-1.23.3.tar.gz"          
-      - run:
-          name: "Unpack nginx"
-          command: "tar -xzf nginx-1.23.3.tar.gz"
-      - run:
           name: "Install nginx dependencies"
           command: |
             sudo apt-get update -y
             sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev
-      - run:
-          name: "Configure nginx"
-          command: "./configure --add-module=../akita"
-          working_directory: "nginx-1.23.3"
-      - run:
-          name: "Compile"
-          command: "make"
-          working_directory: "nginx-1.23.3"
+      - build-nginx:
+          name: "Build mainline"
+          version: "1.23.2"
+      - build-nginx:
+          name: "Build stable"
+          version: "1.22.1"
+          
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
