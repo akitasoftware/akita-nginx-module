@@ -2,9 +2,27 @@
 # See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
-commands:
-  build-nginx:
-    description: "Build a specified Nginx version and compile the module against that version."
+# Define a job to be invoked later in a workflow.
+# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
+jobs:
+  prep-module:
+    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
+    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
+    docker:
+      - image: cimg/base:stable
+    # Add steps to the job
+    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+    steps:
+      - checkout:
+          path: "akita"
+      - run:
+          name: "Install nginx dependencies"
+          command: |
+            sudo apt-get update -y
+            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
+  build-module:
+    docker:
+      - image: cimg/base:stable
     parameters:
       version:
         default: "1.23.3"
@@ -23,35 +41,19 @@ commands:
       - run:
           name: "Compile <<parameters.version>>"
           command: "make"
-          working_directory: "nginx-<<parameters.version>>"      
-
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
-jobs:
-  build-module:
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
-    docker:
-      - image: cimg/base:stable
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
-    steps:
-      - checkout:
-          path: "akita"
-      - run:
-          name: "Install nginx dependencies"
-          command: |
-            sudo apt-get update -y
-            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev
-      - build-nginx:
-          version: "1.23.2"
-      - build-nginx:
-          version: "1.22.1"
-          
+          working_directory: "nginx-<<parameters.version>>"
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
   akita-module:
     jobs:
-      - build-module
+      - prep-module
+      - build-module:
+          name:
+            Build against Nginx <<matrix.version>>
+          requires:
+            - prep-module
+          matrix:
+            parameters:
+              version: ["1.23.3","1.22.1"]
