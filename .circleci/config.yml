@@ -5,29 +5,26 @@ version: 2.1
 # Define a job to be invoked later in a workflow.
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-  prep-module:
+  build-module:
     # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
     # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
-    docker:
-      - image: cimg/base:stable
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
-    steps:
-      - checkout:
-          path: "akita"
-      - run:
-          name: "Install nginx dependencies"
-          command: |
-            sudo apt-get update -y
-            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
-  build-module:
     docker:
       - image: cimg/base:stable
     parameters:
       version:
         default: "1.23.3"
         type: string
+    # Add steps to the job
+    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
+      - checkout:
+          path: "akita"
+      # TODO: build this into a custom image?
+      - run:
+          name: "Install nginx dependencies"
+          command: |
+            sudo apt-get update -y
+            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
       - run:
           name: "Download nginx <<parameters.version>>"
           command: "wget http://nginx.org/download/nginx-<<parameters.version>>.tar.gz"          
@@ -48,12 +45,9 @@ jobs:
 workflows:
   akita-module:
     jobs:
-      - prep-module
       - build-module:
           name:
             Build against Nginx <<matrix.version>>
-          requires:
-            - prep-module
           matrix:
             parameters:
               version: ["1.23.3","1.22.1"]
