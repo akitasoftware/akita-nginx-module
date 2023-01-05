@@ -1,6 +1,6 @@
 # akita-ngx-module
 
-Work-in-progress module for Nginx which mirrors request and response data to the Akita agent.
+Nginx module for mirroring request and response data to the Akita agent.
 
 
 ## Build instructions

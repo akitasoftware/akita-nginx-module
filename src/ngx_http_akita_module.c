@@ -12,7 +12,10 @@ typedef struct {
   
 } ngx_http_akita_loc_conf_t;
 
-/* Create the Akita configuration */
+/* Create the Akita configuration.
+ *
+ * Returns the configuration on success; NULL otherwise.
+ */
 static void *
 ngx_http_akita_create_loc_conf(ngx_conf_t *cf) {
   ngx_http_akita_loc_conf_t *conf;
@@ -64,9 +67,16 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r);
 static ngx_int_t
 ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
 
+/* The next header-filter handler in the chain. Must be called by our handler
+ * once it is done its work.
+ */
 static ngx_http_output_header_filter_pt ngx_http_next_header_filter;
+/* The next body-filter handler in the chain. Must be called by our handler
+ * once it is done its work.
+ */
 static ngx_http_output_body_filter_pt ngx_http_next_body_filter;
  
+/* Post-configuration handler for initializing the Akita module. */
 static ngx_int_t
 ngx_http_akita_init(ngx_conf_t *cf) {
   ngx_http_handler_pt *h;
@@ -121,7 +131,10 @@ ngx_module_t ngx_http_akita_module = {
 };
 
 
-/* Called when the request is fully read. */
+/* Relays a request to the Akita Agent. To indicate that the we are done
+ * processing the request, the status in the request's context is set to
+ * DECLINED. Called when the request is fully read.
+ */
 static void
 ngx_http_akita_body_callback(ngx_http_request_t *r) {
   off_t len;
@@ -168,8 +181,7 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
 
   /* Record that we should respond with DECLINED the next time
      the request hits our handler. */
-  ngx_http_akita_ctx_t  *ctx;
-  ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  ngx_http_akita_ctx_t  *ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
   ctx->status = NGX_DECLINED;
   
   /* Re-run the original request chain to send the request
@@ -264,12 +276,12 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
   ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "Resonse code %d from subrequest", rc );
+                 "Response code %d from subrequest", rc );
   return NGX_OK;
 }
 
 static unsigned char *intro = (unsigned char *)"{ \"headers\" : [";
-static unsigned char *outro = (unsigned char *)"[}";
+static unsigned char *outro = (unsigned char *)"]}";
 
 static ngx_int_t
 ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
@@ -334,7 +346,7 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   link->next = NULL;
   out->next = link;
   
-  /* Allocate callback structre from pool */
+  /* Allocate callback structure from pool */
   ngx_http_post_subrequest_t *callback = ngx_pcalloc( r->connection->pool, sizeof( ngx_http_post_subrequest_t ) );
   callback->handler = ngx_http_akita_subrequest_callback;
   callback->data = NULL;
