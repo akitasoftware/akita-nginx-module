@@ -1,10 +1,10 @@
-/*
- * Copyright (C) 2022 Akita Software
+/* Copyright (C) 2022 Akita Software
  */
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <ngx_http_request.h>
+
 
 typedef struct {
   /* The network address for the Akita agent REST API.*/  
@@ -48,11 +48,11 @@ static ngx_command_t ngx_http_akita_commands[] = {
 
 /* Context for a particular HTTP request */
 typedef struct {
-  // Have we already handled this request?
+  /* Have we already handled this request? */
   ngx_int_t     status;
 
-  /* TODO: Server arrival time. */
-  /* TODO: Buffered response data. */
+  /* TODO: Server arrival time.
+     TODO: Buffered response data. */
 } ngx_http_akita_ctx_t;
 
 static ngx_int_t
@@ -83,11 +83,11 @@ ngx_http_akita_init(ngx_conf_t *cf) {
   }
   *h = ngx_http_akita_precontent_handler;
 
-  // Install our header filter
+  /* Install our header filter */
   ngx_http_next_header_filter = ngx_http_top_header_filter;
   ngx_http_top_header_filter = ngx_http_akita_response_header_filter;
   
-  // Install our body filter
+  /* Install our body filter */
   ngx_http_next_body_filter = ngx_http_top_body_filter;
   ngx_http_top_body_filter = ngx_http_akita_response_body_filter;
   
