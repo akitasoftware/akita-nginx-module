@@ -1,0 +1,10 @@
+rules:
+- id: cpp-style-commands
+  languages:
+    - generic
+  message: Module source code should use only // commands
+  patterns:
+    - pattern: // ...
+    - pattern-not-inside: /* ... */
+  severity: WARNING
+  
