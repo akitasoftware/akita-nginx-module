@@ -5,7 +5,7 @@
 #include <ngx_http.h>
 #include <ngx_http_request.h>
 
-
+/* Location-specific configuration for the Akita module. */
 typedef struct {
   /* The network address for the Akita agent REST API.*/  
   ngx_str_t agent_address;
@@ -29,6 +29,8 @@ ngx_http_akita_create_loc_conf(ngx_conf_t *cf) {
   return conf;
 }
 
+/* Merge a parent Akita configuration into the child configuration.
+ * Uses "" as the default value that indicates mirroring is not enabled. */
 static char *
 ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   ngx_http_akita_loc_conf_t *prev = parent;
@@ -39,7 +41,9 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   return NGX_CONF_OK;
 }
 
+/* Configuration directives provided by this module. */
 static ngx_command_t ngx_http_akita_commands[] = {
+  /* Enables mirroring of the given location, and specifies the network address of the akita agent. */
   { ngx_string("akita_agent"),
     NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
     ngx_conf_set_str_slot,
@@ -152,11 +156,13 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   /* TODO: create a subrequest to send the body data on to Akita,
      instead of just logging it. */
   len = 0;
+  subset = ngx_pcalloc( r->connection->pool, 41 );
   for (in = r->request_body->bufs; in; in = in->next) {
     if ( ngx_buf_in_memory(in->buf) ) {
-      subset = ngx_pcalloc( r->connection->pool, 41 );
       if ( ngx_buf_size(in->buf) <= 40 ) {
         ngx_cpystrn( subset, in->buf->pos, ngx_buf_size(in->buf) );
+        /* ensure null termination */
+        subset[ngx_buf_size(in->buf)] = 0;
       } else {
         ngx_cpystrn( subset, in->buf->pos, 40);
       }      
@@ -164,7 +170,6 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
                      "Buffer starting at %d: %s...", len, subset );
     } else if ( in->buf->in_file ) {
       /* We lose, read from file (and block everything?  We need a better way.) */
-      subset = ngx_pcalloc( r->connection->pool, 41 );
       num_read = ngx_read_file( in->buf->file, subset, 40, in->buf->file_pos );
       if ( num_read > 0 ) {
         /* TODO: error checking? */
@@ -191,6 +196,11 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   ngx_http_core_run_phases(r);
 }
 
+/* For each incoming request, check whether mirroring is enabled.
+ * Read the request and set up a context to track status. 
+ * After the request has been fully read, pass the request on 
+ * to the real hander.
+ */
 static ngx_int_t
 ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   ngx_http_akita_loc_conf_t *akita_config;
@@ -242,20 +252,13 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
                  host_name,
                  &(r->uri));
   
-  header_part = &(r->headers_in.headers.part);
-  headers = header_part->elts; 
-  for ( i = 0;; i++) {
-    if (i >= header_part->nelts) {
-      if (header_part->next == NULL) {
-        break;
-      }
-      header_part = header_part->next;
-      headers = header_part->elts;
-      i = 0;
+  for (header_part = &(r->headers_in.headers.part); header_part; header_part = header_part->next) {
+    headers = header_part->elts;
+    for (i = 0; i < header_part->nelts; i++) {
+      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
+                     "Header '%V' value '%V'",
+                     &headers[i].key, &headers[i].value );      
     }
-    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                   "Header '%V' value '%V'",
-                   &headers[i].key, &headers[i].value );      
   }
 
   ngx_int_t rc = ngx_http_read_client_request_body( r, ngx_http_akita_body_callback );
@@ -283,6 +286,9 @@ ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t
 static unsigned char *intro = (unsigned char *)"{ \"headers\" : [";
 static unsigned char *outro = (unsigned char *)"]}";
 
+/* Called when a response is available.
+ * Mirrors response status code and headers to the Akita agent.
+ */
 static ngx_int_t
 ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   ngx_list_part_t *header_part;
@@ -314,22 +320,17 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   out->next = NULL;
 
   /* TODO: copy headers into subrequest chain as JSON */
-  for ( i = 0;; i++) {
-    if (i >= header_part->nelts) {
-      if (header_part->next == NULL) {
-        break;
-      }
-      header_part = header_part->next;
-      headers = header_part->elts;
-      i = 0;
+  /* Nginx-written headers are not present, nor are the ones from 
+   * the upstream response that will be overwritten?  See
+   * https://forum.nginx.org/read.php?2,225317,225329#msg-225329
+   */
+  for (header_part = &(r->headers_out.headers.part); header_part; header_part = header_part->next) {
+    headers = header_part->elts;
+    for (i = 0; i < header_part->nelts; i++) {
+      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
+                     "Response header '%V' value '%V'",
+                     &headers[i].key, &headers[i].value );      
     }
-    /* Nginx-written headers are not present, nor are the ones from 
-     * the upstream response that will be overwritten?  See
-     * https://forum.nginx.org/read.php?2,225317,225329#msg-225329
-     */
-    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                   "Response header '%V' value '%V'",
-                   &headers[i].key, &headers[i].value );      
   }
 
   b = ngx_calloc_buf( r->pool );

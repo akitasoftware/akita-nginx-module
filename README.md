@@ -8,7 +8,7 @@ Nginx module for mirroring request and response data to the Akita agent.
 Check out Nginx source and this repo.  In the Nginx directory, run
 
 ```
-./configure --add-module=/path/to/akita
+./configure --add-dynamic-module=/path/to/akita
 make
 ```
 
