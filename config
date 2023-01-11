@@ -1,7 +1,8 @@
 # Nginx module config file, read by Nginx build process.
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_akita_module
-ngx_module_srcs="$ngx_addon_dir/src/ngx_http_akita_module.c"
+ngx_module_srcs="$ngx_addon_dir/src/ngx_http_akita_module.c \
+$ngx_addon_dir/src/akita_client.c"
 
 . auto/module
 

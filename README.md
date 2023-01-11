@@ -36,6 +36,8 @@ http {
      # This is a placeholder that will be replaced by a proper upstream.
      location /akita {
         proxy_pass http://localhost:5555/;
+        proxy_http_version 1.1;
+        proxy_set_header   "Connection" "";
      }
   }
 }

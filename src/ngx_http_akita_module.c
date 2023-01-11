@@ -1,9 +1,14 @@
-/* Copyright (C) 2022 Akita Software
+/*
+ * Copyright (C) 2022-2023 Akita Software
  */
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <ngx_http_request.h>
+#include "akita_client.h"
+
+static ngx_int_t
+ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc );
 
 /* Location-specific configuration for the Akita module. */
 typedef struct {
@@ -85,9 +90,13 @@ static ngx_int_t
 ngx_http_akita_init(ngx_conf_t *cf) {
   ngx_http_handler_pt *h;
   ngx_http_core_main_conf_t *cmcf;
-
-  ngx_log_error( NGX_LOG_INFO, cf->log, 0,
-                 "Bork bork bork." );
+  ngx_int_t rc;
+  
+  /* Initialize the client settings (just variable indexes for now.) */
+  rc = ngx_akita_client_init(cf);
+  if (rc != NGX_OK) {
+    return NGX_ERROR;
+  }
   
   /* Register our observer in the precontent phase. */
   cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);  
@@ -135,57 +144,41 @@ ngx_module_t ngx_http_akita_module = {
 };
 
 
+/* Temporary location of proxy that sends to the agent. TBR with an upstream */
+/* TODO: move to configuration before that gets done? */
+static ngx_str_t ngx_http_akita_location = ngx_string( "/akita" );
+
 /* Relays a request to the Akita Agent. To indicate that the we are done
  * processing the request, the status in the request's context is set to
  * DECLINED. Called when the request is fully read.
  */
 static void
 ngx_http_akita_body_callback(ngx_http_request_t *r) {
-  off_t len;
-  ngx_chain_t  *in;
-  u_char *subset;
-  ssize_t num_read;
-  
   if (r->request_body == NULL ) {
     ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                   "Null request body" );
-    
+                   "Null request body" );    
     return;
   }
 
-  /* TODO: create a subrequest to send the body data on to Akita,
-     instead of just logging it. */
-  len = 0;
-  subset = ngx_pcalloc( r->connection->pool, 41 );
-  for (in = r->request_body->bufs; in; in = in->next) {
-    if ( ngx_buf_in_memory(in->buf) ) {
-      if ( ngx_buf_size(in->buf) <= 40 ) {
-        ngx_cpystrn( subset, in->buf->pos, ngx_buf_size(in->buf) );
-        /* ensure null termination */
-        subset[ngx_buf_size(in->buf)] = 0;
-      } else {
-        ngx_cpystrn( subset, in->buf->pos, 40);
-      }      
-      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                     "Buffer starting at %d: %s...", len, subset );
-    } else if ( in->buf->in_file ) {
-      /* We lose, read from file (and block everything?  We need a better way.) */
-      num_read = ngx_read_file( in->buf->file, subset, 40, in->buf->file_pos );
-      if ( num_read > 0 ) {
-        /* TODO: error checking? */
-        ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                       "FILE buffer starting at %d: %s...", len, subset );
-      }
-    }
-    len += ngx_buf_size(in->buf);
+  /* Allocate callback structure from pool */
+  ngx_http_post_subrequest_t *callback = ngx_pcalloc(r->connection->pool, sizeof( ngx_http_post_subrequest_t ));
+  if (callback == NULL) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Failed to allocate callback" );    
+    return;
+  }
+  callback->handler = ngx_http_akita_subrequest_callback;
+  callback->data = NULL;
+
+  /* Send the request metadata and body to Akita */
+  if (ngx_akita_send_request_body(r, ngx_http_akita_location, callback) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Failed to send request body to Akita agent" );
+    /* Fall through and continue to send the real request! */
   }
 
-  ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "Request body size = %d",
-                 len);
-
   /* Record that we should respond with DECLINED the next time
-     the request hits our handler. */
+     the same request hits our handler. */
   ngx_http_akita_ctx_t  *ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
   ctx->status = NGX_DECLINED;
   
@@ -296,7 +289,14 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   ngx_http_request_t *sr;
   ngx_uint_t i = 0;
   ngx_int_t rc;
-  
+
+  /* Only operate on the main request (in particular, not on our own subrequest!) */
+  if ( r != r->main ) {
+    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
+                  "Skipping non-main response." );
+    return ngx_http_next_header_filter(r);    
+  }
+    
   header_part = &(r->headers_out.headers.part);
   headers = header_part->elts; 
   ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
@@ -305,7 +305,9 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   ngx_buf_t *b;
   ngx_chain_t *out;
   ngx_chain_t *link;
-  
+  ngx_uint_t content_length = 0;
+  ngx_str_t content_length_str;
+    
   b = ngx_calloc_buf( r->pool );
   if ( b == NULL ) {
     return NGX_ERROR;
@@ -314,6 +316,7 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   b->last = intro + ngx_strlen( intro );
   b->memory = 1;
   b->last_buf = 0;
+  content_length += ngx_strlen( intro );
   
   out = ngx_alloc_chain_link( r->pool );
   out->buf = b;
@@ -341,6 +344,7 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   b->last = outro + ngx_strlen( outro );
   b->memory = 1;
   b->last_buf = 1;
+  content_length += ngx_strlen( outro );
   
   link = ngx_alloc_chain_link( r->pool );
   link->buf = b;
@@ -374,7 +378,17 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
     return NGX_ERROR;
   }
   sr->request_body->bufs = out;
-   
+
+  /* Rewrite the content-length header to match our new body. */
+  content_length_str.data = ngx_pcalloc( r->connection->pool, 20 );
+  content_length_str.len = ngx_snprintf( content_length_str.data, 20, "%d", content_length ) - content_length_str.data;
+  
+  /* TODO: check if absent */
+  sr->headers_in.content_length->hash = 1;
+  sr->headers_in.content_length->value.data = content_length_str.data;    
+  sr->headers_in.content_length->value.len = content_length_str.len;    
+  sr->headers_in.content_length_n = content_length;
+  
   return ngx_http_next_header_filter(r);
 }
 
