@@ -135,7 +135,9 @@ ngx_module_t ngx_http_akita_module = {
 
 /* Temporary location of proxy that sends to the agent. TBR with an upstream */
 /* TODO: move to configuration before that gets done? */
-static ngx_str_t ngx_http_akita_location = ngx_string( "/akita" );
+static ngx_str_t ngx_http_akita_request_location = ngx_string( "/akita/trace/v1/request" );
+static ngx_str_t ngx_http_akita_response_location = ngx_string( "/akita/trace/v1/response/headers" );
+/* static ngx_str_t ngx_http_akita_response_body_location = ngx_string( "/akita/trace/v1/response/body" ); */
 
 /* Relays a request to the Akita Agent. To indicate that the we are done
  * processing the request, the status in the request's context is set to
@@ -166,7 +168,7 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   callback->data = NULL;
 
   /* Send the request metadata and body to Akita */
-  if (ngx_akita_send_request_body(r, ngx_http_akita_location, ctx, callback) != NGX_OK) {
+  if (ngx_akita_send_request_body(r, ngx_http_akita_request_location, ctx, callback) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Failed to send request body to Akita agent" );
     /* Fall through and continue to send the real request! */
@@ -328,12 +330,11 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
 
   /* Send the callback to a new path for now,
      later replace this by a proper upstream  */ 
-  ngx_str_t replacement_uri = ngx_string( "/akita" );
   ngx_str_t query_params = ngx_null_string;
 
   /* Update the agent with the information we got in the response */
   rc = ngx_http_subrequest( r,
-                            &replacement_uri,
+                            &ngx_http_akita_response_location,
                             &query_params,
                             &sr,
                             callback,

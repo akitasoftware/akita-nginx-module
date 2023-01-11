@@ -177,7 +177,7 @@ static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
   j->tail->buf->last += format.len;    
 }
 
-/* API request schemas */
+/* API request schema and subrequest manipulation */
 
 /* Request format:
 {
@@ -219,25 +219,6 @@ akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest) {
   return NGX_OK;
 }
 
-
-/* Top-level functions */
-
-/* Initialize the Akita client based on the current configuration. */
-ngx_int_t
-ngx_akita_client_init(ngx_conf_t *cf) {
-  ngx_str_t name = ngx_string("request_id");
-
-  /* Cache the index of the $request_id variable */
-  ngx_request_id_index = ngx_http_get_variable_index(cf, &name);
-  if (ngx_request_id_index == NGX_ERROR) {
-    ngx_log_error( NGX_LOG_ERR, cf->log, 0,
-                   "Can't find 'request_id` variable." );
-    return NGX_ERROR;
-  }
-
-  return NGX_OK;
-}
-
 /* Remove all input headers from a (sub-)request. */
 static void
 ngx_akita_clear_headers(ngx_http_request_t *r) {
@@ -246,6 +227,41 @@ ngx_akita_clear_headers(ngx_http_request_t *r) {
 
   /* Set up a new list of ngx_table_elt_t. */
   ngx_list_init(&r->headers_in.headers, r->pool, 4, sizeof(ngx_table_elt_t));
+}
+
+/* Write the list of headers to the JSON API call */
+static void
+ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
+  ngx_list_part_t *header_part;
+  ngx_table_elt_t *headers;
+  ngx_uint_t i = 0;
+  ngx_uint_t need_comma = 0;
+  
+  static ngx_str_t headers_key = ngx_string( "headers" );
+  static ngx_str_t header_key = ngx_string( "header" );
+  static ngx_str_t value_key = ngx_string( "value" );
+  json_write_string_literal(j, &headers_key);
+  json_write_char(j, ':' );
+  json_write_char(j, '[' );  
+  for (header_part = &(r->headers_in.headers.part); header_part; header_part = header_part->next) {
+    headers = header_part->elts;
+    for (i = 0; i < header_part->nelts; i++) {
+      if (need_comma) {
+        json_write_char(j, ',');
+      }
+      json_write_char(j, '{');
+      json_write_string_literal(j, &header_key);
+      json_write_char(j, ':' );
+      json_write_string_literal(j, &headers[i].key);
+      json_write_char(j, ',' );      
+      json_write_string_literal(j, &value_key);
+      json_write_char(j, ':' );
+      json_write_string_literal(j, &headers[i].value);
+      json_write_char(j, '}');
+      need_comma = 1;
+    }
+  }
+  json_write_char(j, ']' );  
 }
 
 /* Set the input (request body) content size on a request. */
@@ -298,6 +314,25 @@ ngx_akita_set_json_content_type(ngx_http_request_t *r) {
   return NGX_OK;
 }
 
+
+/* Top-level functions */
+
+/* Initialize the Akita client based on the current configuration. */
+ngx_int_t
+ngx_akita_client_init(ngx_conf_t *cf) {
+  ngx_str_t name = ngx_string("request_id");
+
+  /* Cache the index of the $request_id variable */
+  ngx_request_id_index = ngx_http_get_variable_index(cf, &name);
+  if (ngx_request_id_index == NGX_ERROR) {
+    ngx_log_error( NGX_LOG_ERR, cf->log, 0,
+                   "Can't find 'request_id` variable." );
+    return NGX_ERROR;
+  }
+
+  return NGX_OK;
+}
+
 static ngx_str_t post_method = ngx_string("POST");
 
 ngx_int_t
@@ -335,7 +370,10 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   json_write_char( j, '{' );
   json_write_kv_strings( j, string_fields );
   json_write_char( j, ',' );
-  
+
+  ngx_akita_write_request_headers( j, r );
+  json_write_char( j, ',' );
+    
   static ngx_str_t request_start_key = ngx_string("request_start");
   static ngx_str_t request_arrived_key = ngx_string("request_arrived");
   json_write_string_literal( j, &request_start_key );
