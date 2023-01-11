@@ -35,7 +35,7 @@ typedef struct json_kv_string_s {
 static void json_write_kv_strings( json_data_t *buf, json_kv_string_t *kvs );
 
 
-static ngx_uint_t json_initial_size = 4096;
+static const ngx_uint_t json_initial_size = 4096;
 
 /* Allocate a new buffer for JSON */
 static json_data_t *
