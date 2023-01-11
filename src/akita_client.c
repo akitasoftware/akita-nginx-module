@@ -238,8 +238,6 @@ ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
   ngx_uint_t need_comma = 0;
   
   static ngx_str_t headers_key = ngx_string( "headers" );
-  static ngx_str_t header_key = ngx_string( "header" );
-  static ngx_str_t value_key = ngx_string( "value" );
   json_write_string_literal(j, &headers_key);
   json_write_char(j, ':' );
   json_write_char(j, '[' );  
@@ -249,14 +247,14 @@ ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
       if (need_comma) {
         json_write_char(j, ',');
       }
+      
+      json_kv_string_t header_fields[] = {
+        { ngx_string( "header" ), headers[i].key, 0 },
+        { ngx_string( "value" ), headers[i].value, 0 },
+        { ngx_null_string, ngx_null_string, 0 }        
+      };
       json_write_char(j, '{');
-      json_write_string_literal(j, &header_key);
-      json_write_char(j, ':' );
-      json_write_string_literal(j, &headers[i].key);
-      json_write_char(j, ',' );      
-      json_write_string_literal(j, &value_key);
-      json_write_char(j, ':' );
-      json_write_string_literal(j, &headers[i].value);
+      json_write_kv_strings(j, header_fields);
       json_write_char(j, '}');
       need_comma = 1;
     }
