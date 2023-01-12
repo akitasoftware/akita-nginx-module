@@ -166,6 +166,8 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
  * Output a timestamp as a string literal.  We use RFC3339 format with 
  * microsecond precision and UTC time zone. Note that the ngx_request_t 
  * timestamp is in seconds and milliseconds.
+ *
+ * Sets `j->oom` if an error occurs.
  */
 static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
   static ngx_str_t format = ngx_string("\"2006-01-02T15:04:05.999999Z\"");
