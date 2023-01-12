@@ -297,7 +297,12 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   ngx_http_request_t *subreq;
   
   j = json_alloc( r->connection->pool );
-
+  if (j == NULL) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not allocate JSON buffer" );
+    return NGX_ERROR;
+  }
+  
   rc = akita_get_request_id(r, &request_id );
   if (rc != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
@@ -362,9 +367,13 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
      TODO: what to do about failure here? It seems too late to stop the subrequest. */
   ngx_akita_clear_headers( subreq );
   if (ngx_akita_set_request_size( subreq, j->content_length ) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not set content-length header" );    
     return NGX_ERROR;
   }
   if (ngx_akita_set_json_content_type( subreq ) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not set content type header" );    
     return NGX_ERROR;
   }
   
