@@ -162,7 +162,7 @@ static void
 ngx_http_akita_body_callback(ngx_http_request_t *r) {
   ngx_http_akita_loc_conf_t *akita_config;
   ngx_http_akita_ctx_t *ctx;
-  
+
   if (r->request_body == NULL ) {
     ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
                    "Null request body" );    

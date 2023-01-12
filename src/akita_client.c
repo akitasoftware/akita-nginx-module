@@ -39,9 +39,9 @@ static void ngx_akita_clear_headers(ngx_http_request_t *r);
 static ngx_int_t ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length);
 static ngx_int_t ngx_akita_set_json_content_type(ngx_http_request_t *r);
 
-static ngx_uint_t json_initial_size = 4096;
+static const ngx_uint_t json_initial_size = 4096;
 
-/* Allocate a new buffer for JSON */
+/* Allocate a new buffer for JSON. Returns NULL if the allocation fails. */
 static json_data_t *
 json_alloc( ngx_pool_t *pool ) {
   ngx_bufs_t bufs;
@@ -67,6 +67,8 @@ json_alloc( ngx_pool_t *pool ) {
  * a pointer to the start of that space, which will always be in j->tail.
  * The caller is responsible for updating content_length and the
  * buffer's last pointer.
+ *
+ * If an error occurs, sets `j->oom` and returns NULL.
  */
 static unsigned char *
 json_ensure_space(json_data_t *j, ngx_uint_t size) {
@@ -102,7 +104,10 @@ json_ensure_space(json_data_t *j, ngx_uint_t size) {
   return curr_buf->last;  
 }
 
-/* Write a single character to the JSON buffer */
+/*
+ * Write a single character to the JSON buffer. Sets `j->oom` if an error
+ * occurs.
+ */
 static void json_write_char( json_data_t *j, unsigned char c ) {
   unsigned char *p = json_ensure_space( j, 1 );
   if (p == NULL) {
@@ -113,7 +118,10 @@ static void json_write_char( json_data_t *j, unsigned char c ) {
   j->tail->buf->last++;
 }
 
-/* Write a properly-escaped string literal to the JSON buffer, including "" */
+/*
+ * Write a properly-escaped string literal to the JSON buffer, including "".
+ * Sets `j->oom` if an error occurs.
+ */
 static void json_write_string_literal(json_data_t *j, ngx_str_t *str) {
   unsigned char *dst;
   uintptr_t sz;
@@ -153,19 +161,18 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
   ngx_uint_t need_comma = 0;
   
   while (kv->key.len > 0) {
-    if (need_comma) {
+    if (kv->omit) {
+      continue;
+    }
+
+     if (need_comma) {
       json_write_char(j, ',');      
     }
 
-    if (kv->omit) {
-      need_comma = 0;
-    } else {
-      json_write_string_literal(j, &(kv->key));
-      json_write_char(j, ':');
-      json_write_string_literal(j, &(kv->value));
-      need_comma = 1;
-    }
-
+    json_write_string_literal(j, &(kv->key));
+    json_write_char(j, ':');
+    json_write_string_literal(j, &(kv->value));
+    need_comma = 1;
     kv++;
   }
 }
@@ -174,6 +181,8 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
  * Output a timestamp as a string literal.  We use RFC3339 format with 
  * microsecond precision and UTC time zone. Note that the ngx_request_t 
  * timestamp is in seconds and milliseconds.
+ *
+ * Sets `j->oom` if an error occurs.
  */
 static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
   static ngx_str_t format = ngx_string("\"2006-01-02T15:04:05.999999Z\"");
@@ -216,7 +225,7 @@ static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
 static ngx_int_t ngx_request_id_index = 0;
 
 /* 
- * Get the request ID as a string.
+ * Get the request ID as a string. Returns an Nginx error code.
  * TODO: for ngx prior to 1.11.0, we need to use the connection and
  * connection requests to generate an ID.
  */
@@ -368,6 +377,7 @@ ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length) {
   header->value = content_length_str;
   header->hash = 1;
   
+  r->headers_in.content_length = header;
   r->headers_in.content_length_n = content_length;
   return NGX_OK;
 }
@@ -386,6 +396,8 @@ ngx_akita_set_json_content_type(ngx_http_request_t *r) {
   header->key = content_type_key;
   header->value = content_type_val;
   header->hash = 1;
+
+  r->headers_in.content_type = header;
   return NGX_OK;
 }
 
@@ -421,7 +433,12 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   ngx_http_request_t *subreq;
   
   j = json_alloc( r->connection->pool );
-
+  if (j == NULL) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not allocate JSON buffer" );
+    return NGX_ERROR;
+  }
+  
   rc = ngx_akita_get_request_id(r, &request_id );
   if (rc != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
@@ -501,12 +518,16 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   subreq->request_body->bufs = j->chain;
 
   /* Replace the existing headers entirely. 
-     TODO: what to do about failure here? It seems to late to stop the subrequest. */
+     TODO: what to do about failure here? It seems too late to stop the subrequest. */
   ngx_akita_clear_headers( subreq );
   if (ngx_akita_set_request_size( subreq, j->content_length ) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not set content-length header" );    
     return NGX_ERROR;
   }
   if (ngx_akita_set_json_content_type( subreq ) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not set content type header" );    
     return NGX_ERROR;
   }
   
