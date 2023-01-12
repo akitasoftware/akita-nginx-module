@@ -26,6 +26,7 @@ ngx_akita_client_init(ngx_conf_t *cf);
 ngx_int_t
 ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
                             ngx_http_akita_ctx_t *ctx,
+                            ngx_http_akita_loc_conf_t *config,
                             ngx_http_post_subrequest_t *callback);
 
 #endif /* NGX_AKITA_MODULE_AKITA_CLIENT_H_INCLUDED */

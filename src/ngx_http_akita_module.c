@@ -7,13 +7,21 @@
 
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc );
+static void *
+ngx_http_akita_create_loc_conf(ngx_conf_t *cf);
+static char *
+ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+static ngx_int_t
+ngx_http_akita_precontent_handler(ngx_http_request_t *r);
+static ngx_int_t
+ngx_http_akita_response_header_filter(ngx_http_request_t *r);
+static ngx_int_t
+ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
+static ngx_int_t
+ngx_http_akita_init(ngx_conf_t *cf);
 
-/* Location-specific configuration for the Akita module. */
-typedef struct {
-  /* The network address for the Akita agent REST API.*/  
-  ngx_str_t agent_address;
-  
-} ngx_http_akita_loc_conf_t;
+static const ngx_uint_t default_max_body = 1 * 1024 * 1024;
+static const char default_agent_address[] = "localhost:50800";
 
 /* Create the Akita configuration.
  *
@@ -28,42 +36,49 @@ ngx_http_akita_create_loc_conf(ngx_conf_t *cf) {
     return NULL;
   }
 
-  ngx_str_null( &(conf->agent_address) );
+  conf->max_body_size = NGX_CONF_UNSET_SIZE;
+  conf->enabled = NGX_CONF_UNSET;
   return conf;
 }
 
-/* Merge a parent Akita configuration into the child configuration.
- * Uses "" as the default value that indicates mirroring is not enabled. */
+/* Merge a parent Akita configuration (global or server) into the child configuration (server or location)  */
 static char *
 ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   ngx_http_akita_loc_conf_t *prev = parent;
   ngx_http_akita_loc_conf_t *conf = child;
   
-  ngx_conf_merge_str_value( conf->agent_address, prev->agent_address, "" );
-  
+  ngx_conf_merge_str_value(conf->agent_address, prev->agent_address, default_agent_address);
+  ngx_conf_merge_size_value(conf->max_body_size, prev->max_body_size, default_max_body);
+  ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
   return NGX_CONF_OK;
 }
 
 /* Configuration directives provided by this module. */
 static ngx_command_t ngx_http_akita_commands[] = {
-  /* Enables mirroring of the given location, and specifies the network address of the akita agent. */
+  /* Specifies the network address of the akita agent. */
   { ngx_string("akita_agent"),
     NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
     ngx_conf_set_str_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof( ngx_http_akita_loc_conf_t, agent_address ),
     NULL },
+  /* Enable mirroring for a location, server, or globally. */
+  { ngx_string("akita_enable"),
+    NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+    ngx_conf_set_flag_slot,
+    NGX_HTTP_LOC_CONF_OFFSET,
+    offsetof( ngx_http_akita_loc_conf_t, enabled ),
+    NULL },
+  /* Set the maximum body size to capture */
+  { ngx_string("akita_max_body_size"),
+    NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+    ngx_conf_set_size_slot,
+    NGX_HTTP_LOC_CONF_OFFSET,
+    offsetof(ngx_http_akita_loc_conf_t, max_body_size),
+    NULL },
   ngx_null_command
 };
 
-static ngx_int_t
-ngx_http_akita_precontent_handler(ngx_http_request_t *r);
-
-static ngx_int_t
-ngx_http_akita_response_header_filter(ngx_http_request_t *r);
-
-static ngx_int_t
-ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
 
 /* The next header-filter handler in the chain. Must be called by our handler
  * once it is done its work.
@@ -145,6 +160,7 @@ static ngx_str_t ngx_http_akita_response_location = ngx_string( "/akita/trace/v1
  */
 static void
 ngx_http_akita_body_callback(ngx_http_request_t *r) {
+  ngx_http_akita_loc_conf_t *akita_config;
   ngx_http_akita_ctx_t *ctx;
   
   if (r->request_body == NULL ) {
@@ -167,8 +183,16 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   callback->handler = ngx_http_akita_subrequest_callback;
   callback->data = NULL;
 
+  /* Retrieve maximum size from configuration */
+  akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
+  if (akita_config == NULL) {
+    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
+                   "No Akita configuration in callback" );
+    return;
+  }
+  
   /* Send the request metadata and body to Akita */
-  if (ngx_akita_send_request_body(r, ngx_http_akita_request_location, ctx, callback) != NGX_OK) {
+  if (ngx_akita_send_request_body(r, ngx_http_akita_request_location, ctx, akita_config, callback) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Failed to send request body to Akita agent" );
     /* Fall through and continue to send the real request! */
@@ -201,7 +225,7 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   }
 
   akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
-  if ( akita_config == NULL || akita_config->agent_address.len == 0 ) {
+  if ( akita_config == NULL || !akita_config->enabled ) {    
     /* Not enabled for this location. */
     return NGX_DECLINED;
   }
