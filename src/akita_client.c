@@ -294,6 +294,7 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
   uintptr_t sz;
   ngx_chain_t  *in;
   static unsigned char *unescaped, *dst;
+  static unsigned char *file_buf = NULL;
   size_t unescaped_len = 0;
   size_t mirrored = 0;  /* must be <= max_size */
   size_t truncated = 0; 
@@ -324,8 +325,24 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
         truncated = mirrored + unescaped_len;
         unescaped_len = max_size - mirrored;
       }
-    } else {      
-      /* TODO: allocate a buffer and use it? */
+    } else {
+      /* Allocate a buffer and read only as much as we need from the file */
+      unescaped_len = in->buf->file_last - in->buf->file_pos;
+
+      if (mirrored + unescaped_len > max_size) {
+        truncated = mirrored + unescaped_len;
+        unescaped_len = max_size - mirrored;
+      }
+
+      /* Allocate a buffer; don't both clearing it? */
+      file_buf = ngx_palloc(r->connection->pool, unescaped_len);
+      if (file_buf == NULL) {
+        j->oom = 1;
+        return;
+      }
+      
+      ngx_read_file( in->buf->file, file_buf, unescaped_len, in->buf->file_pos );
+      unescaped = file_buf;
     }
 
     sz = ngx_escape_json( NULL, unescaped, unescaped_len );
@@ -337,6 +354,12 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
     mirrored += unescaped_len;
     j->content_length += (unescaped_len + sz);
     j->tail->buf->last = dst;
+
+    if (file_buf != NULL) {
+      /* If the buffer was large enough, return it to the system allocator */
+      ngx_pfree(r->connection->pool, file_buf);
+      file_buf = NULL;
+    }
   }
 
   json_write_char( j, '"' );
