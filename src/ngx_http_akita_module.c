@@ -1,9 +1,7 @@
 /*
  * Copyright (C) 2022-2023 Akita Software
  */
-#include <ngx_config.h>
-#include <ngx_core.h>
-#include <ngx_http.h>
+#include "ngx_http_akita_module.h"
 #include <ngx_http_request.h>
 #include "akita_client.h"
 
@@ -57,15 +55,6 @@ static ngx_command_t ngx_http_akita_commands[] = {
     NULL },
   ngx_null_command
 };
-
-/* Context for a particular HTTP request */
-typedef struct {
-  /* Have we already handled this request? */
-  ngx_int_t     status;
-
-  /* TODO: Server arrival time.
-     TODO: Buffered response data. */
-} ngx_http_akita_ctx_t;
 
 static ngx_int_t
 ngx_http_akita_precontent_handler(ngx_http_request_t *r);
@@ -154,11 +143,17 @@ static ngx_str_t ngx_http_akita_location = ngx_string( "/akita" );
  */
 static void
 ngx_http_akita_body_callback(ngx_http_request_t *r) {
+  ngx_http_akita_ctx_t *ctx;
+
   if (r->request_body == NULL ) {
     ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
                    "Null request body" );    
     return;
   }
+
+  /* Record (approximate) time of last byte of body */
+  ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  ngx_gettimeofday( &ctx->request_arrived );
 
   /* Allocate callback structure from pool */
   ngx_http_post_subrequest_t *callback = ngx_pcalloc(r->connection->pool, sizeof( ngx_http_post_subrequest_t ));
@@ -171,7 +166,7 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   callback->data = NULL;
 
   /* Send the request metadata and body to Akita */
-  if (ngx_akita_send_request_body(r, ngx_http_akita_location, callback) != NGX_OK) {
+  if (ngx_akita_send_request_body(r, ngx_http_akita_location, ctx, callback) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Failed to send request body to Akita agent" );
     /* Fall through and continue to send the real request! */
@@ -179,7 +174,6 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
 
   /* Record that we should respond with DECLINED the next time
      the same request hits our handler. */
-  ngx_http_akita_ctx_t  *ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
   ctx->status = NGX_DECLINED;
   
   /* Re-run the original request chain to send the request
@@ -197,12 +191,6 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   ngx_http_akita_loc_conf_t *akita_config;
-  ngx_table_elt_t *host_header = NULL;
-  ngx_str_t *host_name = NULL;
-  ngx_str_t unknown = ngx_string( "unknown" );
-  ngx_list_part_t *header_part;
-  ngx_table_elt_t *headers;
-  ngx_uint_t i = 0;
   ngx_http_akita_ctx_t *ctx;
 
   /* Only execute on the main request, not subrequests */
@@ -231,29 +219,11 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   }
   ctx->status = NGX_DONE;  
   ngx_http_set_ctx(r, ctx, ngx_http_akita_module);
-    
-  host_header = r->headers_in.host;
-  if ( host_header != NULL ) {
-    host_name = &host_header->value;
-  } else {
-    host_name = &unknown;
-  }
-  /* TODO: lower to DEBUG level */
-  ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "I saw a request for %V %V %V",
-                 &(r->method_name),
-                 host_name,
-                 &(r->uri));
-  
-  for (header_part = &(r->headers_in.headers.part); header_part; header_part = header_part->next) {
-    headers = header_part->elts;
-    for (i = 0; i < header_part->nelts; i++) {
-      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                     "Header '%V' value '%V'",
-                     &headers[i].key, &headers[i].value );      
-    }
-  }
 
+  /* Record arrival time at microsecond granularity */
+  ngx_gettimeofday( &ctx->request_start );
+
+  /* Set a callback for when entire body is available */
   ngx_int_t rc = ngx_http_read_client_request_body( r, ngx_http_akita_body_callback );
   if ( rc >= NGX_HTTP_SPECIAL_RESPONSE ) {
     return rc;

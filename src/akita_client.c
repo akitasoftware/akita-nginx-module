@@ -2,6 +2,7 @@
  * Copyright (C) 2023 Akita Software
  */
 
+#include "ngx_http_akita_module.h"
 #include "akita_client.h"
 
 static ngx_int_t
@@ -23,6 +24,7 @@ static json_data_t* json_alloc( ngx_pool_t *pool );
 static unsigned char * json_ensure_space( json_data_t *buf, ngx_uint_t size );
 static void json_write_char( json_data_t *buf, unsigned char c );
 static void json_write_string_literal( json_data_t *buf, ngx_str_t *str );
+static void json_write_time_literal( json_data_t *buf, struct timeval *tm  );
 /* TODO: static void json_write_int_literal( json_data_t *buf, ngx_uint_t n ); */
 
 /* A key and string value to write into a JSON object */
@@ -160,6 +162,31 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
   }
 }
 
+/*
+ * Output a timestamp as a string literal.  We use RFC3339 format with 
+ * microsecond precision and UTC time zone. Note that the ngx_request_t 
+ * timestamp is in seconds and milliseconds.
+ *
+ * Sets `j->oom` if an error occurs.
+ */
+static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
+  static ngx_str_t format = ngx_string("\"2006-01-02T15:04:05.999999Z\"");
+  ngx_tm_t tm;
+
+  ngx_gmtime(tv->tv_sec, &tm);  
+  unsigned char *p = json_ensure_space(j, format.len);
+  if (p == NULL) {
+    return;
+  }
+  ngx_sprintf(p, "\"%4d-%02d-%02dT%02d:%02d:%02d.%06dZ\"",
+              tm.ngx_tm_year, tm.ngx_tm_mon,
+              tm.ngx_tm_mday, tm.ngx_tm_hour,
+              tm.ngx_tm_min, tm.ngx_tm_sec,
+              tv->tv_usec);
+  j->content_length += format.len;
+  j->tail->buf->last += format.len;    
+}
+
 /* API request schemas */
 
 /* Request format:
@@ -268,6 +295,7 @@ ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length) {
   return NGX_OK;
 }
 
+/* Set the content-type header to application/json */
 static ngx_int_t
 ngx_akita_set_json_content_type(ngx_http_request_t *r) {
   ngx_table_elt_t *header;
@@ -290,6 +318,7 @@ static ngx_str_t post_method = ngx_string("POST");
 
 ngx_int_t
 ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
+                            ngx_http_akita_ctx_t *ctx,
                             ngx_http_post_subrequest_t *callback) {
   json_data_t *j;
   ngx_str_t request_id;
@@ -326,6 +355,19 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
 
   json_write_char( j, '{' );
   json_write_kv_strings( j, string_fields );
+  json_write_char( j, ',' );
+  
+  static ngx_str_t request_start_key = ngx_string("request_start");
+  static ngx_str_t request_arrived_key = ngx_string("request_arrived");
+  json_write_string_literal( j, &request_start_key );
+  json_write_char( j, ':' );
+  json_write_time_literal( j, &ctx->request_start );
+  
+  json_write_char( j, ',' );
+  json_write_string_literal( j, &request_arrived_key );
+  json_write_char( j, ':' );
+  json_write_time_literal( j, &ctx->request_arrived );
+
   json_write_char( j, '}' );
 
   if (j->oom) {
