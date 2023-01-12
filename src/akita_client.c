@@ -340,7 +340,9 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
         j->oom = 1;
         return;
       }
-      
+
+      /* TODO: this is blocking, but I don't know how to go through the
+       * event system to make it nonblocking. */
       ngx_read_file( in->buf->file, file_buf, unescaped_len, in->buf->file_pos );
       unescaped = file_buf;
     }
