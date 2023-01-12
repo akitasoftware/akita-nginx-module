@@ -228,28 +228,6 @@ akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest) {
   return NGX_OK;
 }
 
-
-/* Top-level functions */
-
-/*
- * Initialize the Akita client based on the current configuration. Returns an
- * Nginx error code.
- */
-ngx_int_t
-ngx_akita_client_init(ngx_conf_t *cf) {
-  ngx_str_t name = ngx_string("request_id");
-
-  /* Cache the index of the $request_id variable */
-  ngx_request_id_index = ngx_http_get_variable_index(cf, &name);
-  if (ngx_request_id_index == NGX_ERROR) {
-    ngx_log_error( NGX_LOG_ERR, cf->log, 0,
-                   "Can't find 'request_id` variable." );
-    return NGX_ERROR;
-  }
-
-  return NGX_OK;
-}
-
 /* Remove all input headers from a (sub-)request. */
 static void
 ngx_akita_clear_headers(ngx_http_request_t *r) {
