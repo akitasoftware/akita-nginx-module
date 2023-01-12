@@ -28,9 +28,11 @@ http {
      listen 8888;
      server_name example.com;
 
+     akita_agent localhost:5555;
+
      location / {
         proxy_pass http://127.0.0.1:8000/;
-        akita_agent localhost:5555;
+        akita_enable on;
      }
  
      # This is a placeholder that will be replaced by a proper upstream.
