@@ -272,117 +272,38 @@ ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t
   return NGX_OK;
 }
 
-static unsigned char *intro = (unsigned char *)"{ \"headers\" : [";
-static unsigned char *outro = (unsigned char *)"]}";
-
 /* Called when a response is available.
  * Mirrors response status code and headers to the Akita agent.
  */
 static ngx_int_t
 ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
-  ngx_list_part_t *header_part;
-  ngx_table_elt_t *headers;
-  ngx_http_request_t *sr;
-  ngx_uint_t i = 0;
-  ngx_int_t rc;
+  ngx_http_akita_loc_conf_t *akita_config;
+  ngx_http_akita_ctx_t *ctx;
 
   /* Only operate on the main request (in particular, not on our own subrequest!) */
   if ( r != r->main ) {
-    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                  "Skipping non-main response." );
     return ngx_http_next_header_filter(r);    
   }
-    
-  header_part = &(r->headers_out.headers.part);
-  headers = header_part->elts; 
-  ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "Response available with %d headers", header_part->nelts );
 
-  ngx_buf_t *b;
-  ngx_chain_t *out;
-  ngx_chain_t *link;
-  ngx_uint_t content_length = 0;
-  ngx_str_t content_length_str;
-    
-  b = ngx_calloc_buf( r->pool );
-  if ( b == NULL ) {
-    return NGX_ERROR;
-  }
-  b->pos = intro;
-  b->last = intro + ngx_strlen( intro );
-  b->memory = 1;
-  b->last_buf = 0;
-  content_length += ngx_strlen( intro );
-  
-  out = ngx_alloc_chain_link( r->pool );
-  out->buf = b;
-  out->next = NULL;
-
-  /* TODO: copy headers into subrequest chain as JSON */
-  /* Nginx-written headers are not present, nor are the ones from 
-   * the upstream response that will be overwritten?  See
-   * https://forum.nginx.org/read.php?2,225317,225329#msg-225329
-   */
-  for (header_part = &(r->headers_out.headers.part); header_part; header_part = header_part->next) {
-    headers = header_part->elts;
-    for (i = 0; i < header_part->nelts; i++) {
-      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                     "Response header '%V' value '%V'",
-                     &headers[i].key, &headers[i].value );      
-    }
+  akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
+  if ( akita_config == NULL || !akita_config->enabled ) {    
+    /* Not enabled for this location. */
+    return ngx_http_next_header_filter(r);
   }
 
-  b = ngx_calloc_buf( r->pool );
-  if ( b == NULL ) {
-    return NGX_ERROR;
-  }
-  b->pos = outro;
-  b->last = outro + ngx_strlen( outro );
-  b->memory = 1;
-  b->last_buf = 1;
-  content_length += ngx_strlen( outro );
-  
-  link = ngx_alloc_chain_link( r->pool );
-  link->buf = b;
-  link->next = NULL;
-  out->next = link;
-  
-  /* Allocate callback structure from pool */
-  ngx_http_post_subrequest_t *callback = ngx_pcalloc( r->connection->pool, sizeof( ngx_http_post_subrequest_t ) );
+  /* Record time when upstream (or nginx) sent its response */
+  ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  ngx_gettimeofday( &ctx->response_start );
+
+  /* Set a callback; TODO: handle errors there.*/
+  ngx_http_post_subrequest_t *callback = ngx_pcalloc( r->connection->pool, sizeof(ngx_http_post_subrequest_t) );
   callback->handler = ngx_http_akita_subrequest_callback;
   callback->data = NULL;
 
-  /* Send the callback to a new path for now,
-     later replace this by a proper upstream  */ 
-  ngx_str_t query_params = ngx_null_string;
-
-  /* Update the agent with the information we got in the response */
-  rc = ngx_http_subrequest( r,
-                            &ngx_http_akita_response_location,
-                            &query_params,
-                            &sr,
-                            callback,
-                            NGX_HTTP_SUBREQUEST_IN_MEMORY );
-  if ( rc >= NGX_HTTP_SPECIAL_RESPONSE ) {
+  if (ngx_akita_send_response_headers(r, ngx_http_akita_response_location, ctx, akita_config, callback) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
-                   "Subrequest return code %d", rc );
+                   "Failed to send response headers to Akita agent" );
   }
-
-  sr->request_body = ngx_pcalloc( r-> pool, sizeof(ngx_http_request_body_t) );
-  if ( sr->request_body == NULL ) {
-    return NGX_ERROR;
-  }
-  sr->request_body->bufs = out;
-
-  /* Rewrite the content-length header to match our new body. */
-  content_length_str.data = ngx_pcalloc( r->connection->pool, 20 );
-  content_length_str.len = ngx_snprintf( content_length_str.data, 20, "%d", content_length ) - content_length_str.data;
-  
-  /* TODO: check if absent */
-  sr->headers_in.content_length->hash = 1;
-  sr->headers_in.content_length->value.data = content_length_str.data;    
-  sr->headers_in.content_length->value.len = content_length_str.len;    
-  sr->headers_in.content_length_n = content_length;
   
   return ngx_http_next_header_filter(r);
 }

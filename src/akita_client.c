@@ -34,12 +34,17 @@ typedef struct json_kv_string_s {
 static void json_write_kv_strings( json_data_t *buf, json_kv_string_t *kvs );
 
 static ngx_int_t ngx_akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest);
-static void ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r );
+static void ngx_akita_write_headers_list(json_data_t *j, ngx_list_t *headers_list);
 static void ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size );
 static void ngx_akita_clear_headers(ngx_http_request_t *r);
 static ngx_int_t ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length);
 static ngx_int_t ngx_akita_set_json_content_type(ngx_http_request_t *r);
-
+static ngx_int_t ngx_akita_send_api_call(ngx_http_request_t *r,
+                                         ngx_str_t agent_path,
+                                         ngx_http_post_subrequest_t *callback,
+                                         ngx_chain_t *body,
+                                         size_t content_length);
+  
 static const ngx_uint_t json_initial_size = 4096;
 
 /* Allocate a new buffer for JSON. Returns NULL if the allocation fails. */
@@ -258,7 +263,7 @@ ngx_akita_clear_headers(ngx_http_request_t *r) {
 
 /* Write the list of headers to the JSON API call */
 static void
-ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
+ngx_akita_write_headers_list(json_data_t *j, ngx_list_t *headers_list ) {
   ngx_list_part_t *header_part;
   ngx_table_elt_t *headers;
   ngx_uint_t i = 0;
@@ -268,7 +273,7 @@ ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
   json_write_string_literal(j, &headers_key);
   json_write_char(j, ':' );
   json_write_char(j, '[' );  
-  for (header_part = &(r->headers_in.headers.part); header_part; header_part = header_part->next) {
+  for (header_part = &(headers_list->part); header_part; header_part = header_part->next) {
     headers = header_part->elts;
     for (i = 0; i < header_part->nelts; i++) {
       if (need_comma) {
@@ -464,7 +469,6 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   json_data_t *j;
   ngx_str_t request_id;
   ngx_int_t rc;
-  ngx_http_request_t *subreq;
   
   j = json_alloc( r->connection->pool );
   if (j == NULL) {
@@ -498,7 +502,7 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   json_write_kv_strings( j, string_fields );
   json_write_char( j, ',' );
 
-  ngx_akita_write_request_headers( j, r );
+  ngx_akita_write_headers_list( j, &r->headers_in.headers );
   json_write_char( j, ',' );
     
   static ngx_str_t request_start_key = ngx_string("request_start");
@@ -525,7 +529,20 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   /* Mark end of body */
   j->tail->buf->last_buf = 1;
 
-  /* Prepare a subrequest with the JSON payload, sent to an internal path. */
+  return ngx_akita_send_api_call(r, agent_path, callback, j->chain, j->content_length);
+}
+
+
+/* Create a subrequest with the JSON payload, sent to an internal path. */
+static ngx_int_t
+ngx_akita_send_api_call(ngx_http_request_t *r,
+                        ngx_str_t agent_path,
+                        ngx_http_post_subrequest_t *callback,
+                        ngx_chain_t *body,
+                        size_t content_length) {
+  ngx_int_t rc;
+  ngx_http_request_t *subreq;
+    
   ngx_str_t query_params = ngx_null_string;
   rc = ngx_http_subrequest( r,
                             &agent_path,
@@ -549,12 +566,12 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   if ( subreq->request_body == NULL ) {
     return NGX_ERROR;
   }
-  subreq->request_body->bufs = j->chain;
+  subreq->request_body->bufs = body;
 
   /* Replace the existing headers entirely. 
      TODO: what to do about failure here? It seems too late to stop the subrequest. */
   ngx_akita_clear_headers( subreq );
-  if (ngx_akita_set_request_size( subreq, j->content_length ) != NGX_OK) {
+  if (ngx_akita_set_request_size( subreq, content_length ) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Could not set content-length header" );    
     return NGX_ERROR;
@@ -566,5 +583,143 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   }
   
   return NGX_OK;    
+  
+}
+
+typedef struct ngx_akita_internal_header_s {
+  ngx_str_t key;
+  ngx_str_t value;
+  ngx_flag_t omit;
+} ngx_akita_internal_header_t;
+
+ngx_int_t
+ngx_akita_send_response_headers(ngx_http_request_t *r, ngx_str_t agent_path,
+                                ngx_http_akita_ctx_t *ctx,
+                                ngx_http_akita_loc_conf_t *config,
+                                ngx_http_post_subrequest_t *callback) {
+  u_char *buf;
+  json_data_t *j;
+  ngx_str_t request_id;
+  ngx_int_t rc;
+  ngx_list_t extra_headers;
+  ngx_akita_internal_header_t *int_header;
+  ngx_table_elt_t *header;
+  
+  j = json_alloc( r->connection->pool );
+  if (j == NULL) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not allocate JSON buffer" );
+    return NGX_ERROR;
+  }
+  
+  rc = ngx_akita_get_request_id(r, &request_id );
+  if (rc != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "Could not get request ID" );
+    return NGX_ERROR;
+  }
+
+  json_kv_string_t string_fields[] = {
+    { ngx_string( "request_id" ), request_id, 0 },  /* 0 */
+    { ngx_null_string, ngx_null_string, 0 },
+  };
+
+  json_write_char( j, '{' );
+  json_write_kv_strings( j, string_fields );
+  json_write_char( j, ',' );
+
+  static ngx_str_t response_code_key = ngx_string( "response_code" );
+  json_write_string_literal(j, &response_code_key);
+  json_write_char(j, ':');
+  json_write_uint_literal(j, r->headers_out.status);
+  json_write_char(j, ',');
+
+  /* Nginx-written headers are not present, nor are the ones from 
+   * the upstream response that will be overwritten?  See
+   * https://forum.nginx.org/read.php?2,225317,225329#msg-225329
+   * So we're going to push a bunch of extra headers onto the 
+   * head of a list.
+   * 
+   * Status            -- n/a
+   * Content-Type      -- add (not included by default)
+   * Content-Length    -- add
+   * Date              -- copied (should already be present)
+   * Last-Modified     -- add
+   * ETag              -- copied
+   * Server            -- copied
+   * WWW-Authenticate  -- copied
+   * Location          -- rewritten (should be present?)
+   * Refresh           -- rewritten
+   * Set-Cookie        -- rewritten
+   * Content-Disposition -- copied
+   * Cache-Control     -- copied
+   * Expires           -- copied
+   * Accept-Ranges     -- copied
+   * Content-Ranges    -- copied
+   * Connection        -- ignore
+   * Keep-Alive        -- ignore
+   * Vary              -- copied
+   * Link              -- copied
+   * Transfer-Encoding -- ignore
+   * Content-Encoding  -- copied
+   */
+  ngx_akita_internal_header_t internal_headers[] = {
+    /* TODO: ngx_http_header_filter_module appends a charset to this, should we? */
+    { ngx_string( "Content-Type" ), r->headers_out.content_type,
+      r->headers_out.content_type.len == 0 },                 /* 0 */    
+    { ngx_string( "Content-Length" ), ngx_null_string, 1 },   /* 1 */
+    { ngx_string( "Last-Modified" ), ngx_null_string, 1 },    /* 2 */
+    { ngx_null_string, ngx_null_string, 1 },
+  };
+
+  /* The -1 value indicates unknown length */
+  if (r->headers_out.content_length_n >= 0) {
+    buf = ngx_pcalloc(r->connection->pool, 20);
+    internal_headers[1].value.data = buf;
+    internal_headers[1].value.len = ngx_snprintf(buf, 20, "%d", r->headers_out.content_length_n) - buf;
+    internal_headers[1].omit = 0;
+  }
+
+  /* The -1 value indicates absence */
+  if (r->headers_out.last_modified_time >= 0) {
+    buf = ngx_pcalloc(r->connection->pool, sizeof("Last-Modified: Mon, 28 Sep 1970 06:00:00 GMT" CRLF) - 1 );
+    internal_headers[2].value.data = buf;
+    internal_headers[2].value.len = ngx_http_time(buf, r->headers_out.last_modified_time) - buf;
+    internal_headers[2].omit = 0;
+  }
+
+  ngx_list_init(&extra_headers, r->connection->pool, 3, sizeof(ngx_table_elt_t));
+    
+  for (int_header = internal_headers; int_header->key.len > 0; int_header++ ) {
+    if (!int_header->omit) {
+      header = ngx_list_push(&extra_headers);
+      header->key = int_header->key;
+      header->value = int_header->value;
+    }
+  };
+  
+  extra_headers.last->next = &r->headers_out.headers.part;
+  extra_headers.last = r->headers_out.headers.last;
+    
+  ngx_akita_write_headers_list( j, &extra_headers );
+  json_write_char( j, ',' );
+    
+  static ngx_str_t response_start_key = ngx_string("response_start");
+  json_write_string_literal( j, &response_start_key );
+  json_write_char( j, ':' );
+  json_write_time_literal( j, &ctx->response_start );  
+
+  json_write_char( j, '}' );
+
+  if (j->oom) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "JSON body got out-of-memory" );
+    return NGX_ERROR;
+  }
+
+  /* Mark end of body */
+  j->tail->buf->last_buf = 1;
+
+  return ngx_akita_send_api_call(r, agent_path, callback, j->chain, j->content_length);
 }
 
