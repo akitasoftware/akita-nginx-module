@@ -22,6 +22,7 @@ static void json_write_char( json_data_t *buf, unsigned char c );
 static void json_write_string_literal( json_data_t *buf, ngx_str_t *str );
 static void json_write_time_literal( json_data_t *buf, struct timeval *tm  );
 static void json_write_uint_literal( json_data_t *buf, ngx_uint_t n );
+static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...);
 
 /* A key and string value to write into a JSON object */
 typedef struct json_kv_string_s {
@@ -133,24 +134,33 @@ static void json_write_string_literal(json_data_t *j, ngx_str_t *str) {
     return;
   }
   *dst++ = '"';
-  dst = (unsigned char *)ngx_escape_json( dst, str->data, str->len );
+  dst = (unsigned char *)ngx_escape_json(dst, str->data, str->len);
   *dst++ = '"';
   j->content_length += sz;
   j->tail->buf->last = dst;
 }
 
-/* Write an unsigned integer to the JSON buffer */
-static void json_write_uint_literal(json_data_t *j, ngx_uint_t n) {
-  const int max_decimal_len = 20; /* handles 64-bit unsigned */
-  unsigned char *dst, *end;
-  
-  dst = json_ensure_space(j, max_decimal_len);
+/* Printf to a JSON buffer; may set `j->oom' on failure. */
+static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...) {
+  u_char *dst, *end;
+  va_list args;
+  va_start(args, fmt);
+
+  dst = json_ensure_space(j, max_len);
   if (dst == NULL) {
     return;
   }
-  end = ngx_snprintf(dst, max_decimal_len, "%ud", n);
+  
+  end = ngx_vslprintf(dst, dst+max_len, fmt, args);
   j->content_length += (end - dst);
-  j->tail->buf->last = end;
+  j->tail->buf->last = end;  
+}
+
+/* Write an unsigned integer to the JSON buffer.
+   Sets 'j->oom' if an error occurs. */
+static void json_write_uint_literal(json_data_t *j, ngx_uint_t n) {
+  const int max_decimal_len = 20; /* handles 64-bit unsigned */
+  json_snprintf(j, max_decimal_len, "%ud", n);
 }
 
 /*
@@ -187,19 +197,12 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
 static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
   static ngx_str_t format = ngx_string("\"2006-01-02T15:04:05.999999Z\"");
   ngx_tm_t tm;
-
-  ngx_gmtime(tv->tv_sec, &tm);  
-  unsigned char *p = json_ensure_space(j, format.len);
-  if (p == NULL) {
-    return;
-  }
-  ngx_sprintf(p, "\"%4d-%02d-%02dT%02d:%02d:%02d.%06dZ\"",
-              tm.ngx_tm_year, tm.ngx_tm_mon,
-              tm.ngx_tm_mday, tm.ngx_tm_hour,
-              tm.ngx_tm_min, tm.ngx_tm_sec,
-              tv->tv_usec);
-  j->content_length += format.len;
-  j->tail->buf->last += format.len;    
+  ngx_gmtime(tv->tv_sec, &tm);
+  json_snprintf(j, format.len, "\"%4d-%02d-%02dT%02d:%02d:%02d.%06dZ\"",
+                tm.ngx_tm_year, tm.ngx_tm_mon,
+                tm.ngx_tm_mday, tm.ngx_tm_hour,
+                tm.ngx_tm_min, tm.ngx_tm_sec,
+                tv->tv_usec);
 }
 
 /* API request schema and subrequest manipulation */
@@ -325,7 +328,7 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
         truncated = mirrored + unescaped_len;
         unescaped_len = max_size - mirrored;
       }
-    } else {
+    } else if (in->buf->in_file) {
       /* Allocate a buffer and read only as much as we need from the file */
       unescaped_len = in->buf->file_last - in->buf->file_pos;
 
@@ -345,6 +348,11 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
        * event system to make it nonblocking. */
       ngx_read_file( in->buf->file, file_buf, unescaped_len, in->buf->file_pos );
       unescaped = file_buf;
+    } else if (in->buf->last_buf) {
+      break;
+    } else {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state");
+      break;
     }
 
     sz = ngx_escape_json( NULL, unescaped, unescaped_len );
@@ -367,9 +375,10 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
   json_write_char( j, '"' );
 
   if (truncated > 0) {
-    json_write_string_literal( j, &truncated_key );
-    json_write_char( j, ':' );
-    json_write_uint_literal( j, truncated );
+    json_write_char(j, ',');
+    json_write_string_literal(j, &truncated_key);
+    json_write_char(j, ':');
+    json_write_uint_literal(j, truncated);
   }
 }
 
