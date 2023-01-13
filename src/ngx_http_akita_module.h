@@ -31,6 +31,10 @@ typedef struct {
   struct timeval request_start;
   struct timeval request_arrived;
 
+  /* Time when response is first observed and when its body is complete */
+  struct timeval response_start;
+  struct timeval response_complete;
+  
   /* TODO: Buffered response data. */
 } ngx_http_akita_ctx_t;
 
