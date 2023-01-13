@@ -337,7 +337,7 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
         unescaped_len = max_size - mirrored;
       }
 
-      /* Allocate a buffer; don't both clearing it? */
+      /* Allocate a buffer; don't bother clearing it? */
       file_buf = ngx_palloc(r->connection->pool, unescaped_len);
       if (file_buf == NULL) {
         j->oom = 1;
