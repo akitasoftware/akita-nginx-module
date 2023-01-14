@@ -5,10 +5,6 @@
 #include "ngx_http_akita_module.h"
 #include "akita_client.h"
 
-static ngx_int_t
-akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest);
-
-
 /* Functions for generating JSON objects. */
 
 /* A chain of buffers holding the JSON output */
@@ -25,7 +21,8 @@ static unsigned char * json_ensure_space( json_data_t *buf, ngx_uint_t size );
 static void json_write_char( json_data_t *buf, unsigned char c );
 static void json_write_string_literal( json_data_t *buf, ngx_str_t *str );
 static void json_write_time_literal( json_data_t *buf, struct timeval *tm  );
-/* TODO: static void json_write_int_literal( json_data_t *buf, ngx_uint_t n ); */
+static void json_write_uint_literal( json_data_t *buf, ngx_uint_t n );
+static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...);
 
 /* A key and string value to write into a JSON object */
 typedef struct json_kv_string_s {
@@ -36,6 +33,12 @@ typedef struct json_kv_string_s {
 
 static void json_write_kv_strings( json_data_t *buf, json_kv_string_t *kvs );
 
+static ngx_int_t ngx_akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest);
+static void ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r );
+static void ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size );
+static void ngx_akita_clear_headers(ngx_http_request_t *r);
+static ngx_int_t ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length);
+static ngx_int_t ngx_akita_set_json_content_type(ngx_http_request_t *r);
 
 static const ngx_uint_t json_initial_size = 4096;
 
@@ -131,10 +134,33 @@ static void json_write_string_literal(json_data_t *j, ngx_str_t *str) {
     return;
   }
   *dst++ = '"';
-  dst = (unsigned char *)ngx_escape_json( dst, str->data, str->len );
+  dst = (unsigned char *)ngx_escape_json(dst, str->data, str->len);
   *dst++ = '"';
   j->content_length += sz;
   j->tail->buf->last = dst;
+}
+
+/* Printf to a JSON buffer; may set `j->oom' on failure. */
+static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...) {
+  u_char *dst, *end;
+  va_list args;
+  va_start(args, fmt);
+
+  dst = json_ensure_space(j, max_len);
+  if (dst == NULL) {
+    return;
+  }
+  
+  end = ngx_vslprintf(dst, dst+max_len, fmt, args);
+  j->content_length += (end - dst);
+  j->tail->buf->last = end;  
+}
+
+/* Write an unsigned integer to the JSON buffer.
+   Sets 'j->oom' if an error occurs. */
+static void json_write_uint_literal(json_data_t *j, ngx_uint_t n) {
+  const int max_decimal_len = 20; /* handles 64-bit unsigned */
+  json_snprintf(j, max_decimal_len, "%ud", n);
 }
 
 /*
@@ -157,7 +183,6 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
     json_write_char(j, ':');
     json_write_string_literal(j, &(kv->value));
     need_comma = 1;
-
     kv++;
   }
 }
@@ -172,22 +197,15 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
 static void json_write_time_literal(json_data_t *j, struct timeval *tv) {
   static ngx_str_t format = ngx_string("\"2006-01-02T15:04:05.999999Z\"");
   ngx_tm_t tm;
-
-  ngx_gmtime(tv->tv_sec, &tm);  
-  unsigned char *p = json_ensure_space(j, format.len);
-  if (p == NULL) {
-    return;
-  }
-  ngx_sprintf(p, "\"%4d-%02d-%02dT%02d:%02d:%02d.%06dZ\"",
-              tm.ngx_tm_year, tm.ngx_tm_mon,
-              tm.ngx_tm_mday, tm.ngx_tm_hour,
-              tm.ngx_tm_min, tm.ngx_tm_sec,
-              tv->tv_usec);
-  j->content_length += format.len;
-  j->tail->buf->last += format.len;    
+  ngx_gmtime(tv->tv_sec, &tm);
+  json_snprintf(j, format.len, "\"%4d-%02d-%02dT%02d:%02d:%02d.%06dZ\"",
+                tm.ngx_tm_year, tm.ngx_tm_mon,
+                tm.ngx_tm_mday, tm.ngx_tm_hour,
+                tm.ngx_tm_min, tm.ngx_tm_sec,
+                tv->tv_usec);
 }
 
-/* API request schemas */
+/* API request schema and subrequest manipulation */
 
 /* Request format:
 {
@@ -214,9 +232,8 @@ static ngx_int_t ngx_request_id_index = 0;
  * TODO: for ngx prior to 1.11.0, we need to use the connection and
  * connection requests to generate an ID.
  */
-static
-ngx_int_t
-akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest) {
+static ngx_int_t
+ngx_akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest) {
   ngx_http_variable_value_t *v;
   
   v = ngx_http_get_indexed_variable(r, ngx_request_id_index);
@@ -229,28 +246,6 @@ akita_get_request_id(ngx_http_request_t *r, ngx_str_t *dest) {
   return NGX_OK;
 }
 
-
-/* Top-level functions */
-
-/*
- * Initialize the Akita client based on the current configuration. Returns an
- * Nginx error code.
- */
-ngx_int_t
-ngx_akita_client_init(ngx_conf_t *cf) {
-  ngx_str_t name = ngx_string("request_id");
-
-  /* Cache the index of the $request_id variable */
-  ngx_request_id_index = ngx_http_get_variable_index(cf, &name);
-  if (ngx_request_id_index == NGX_ERROR) {
-    ngx_log_error( NGX_LOG_ERR, cf->log, 0,
-                   "Can't find 'request_id` variable." );
-    return NGX_ERROR;
-  }
-
-  return NGX_OK;
-}
-
 /* Remove all input headers from a (sub-)request. */
 static void
 ngx_akita_clear_headers(ngx_http_request_t *r) {
@@ -259,6 +254,132 @@ ngx_akita_clear_headers(ngx_http_request_t *r) {
 
   /* Set up a new list of ngx_table_elt_t. */
   ngx_list_init(&r->headers_in.headers, r->pool, 4, sizeof(ngx_table_elt_t));
+}
+
+/* Write the list of headers to the JSON API call */
+static void
+ngx_akita_write_request_headers(json_data_t *j, ngx_http_request_t *r ) {
+  ngx_list_part_t *header_part;
+  ngx_table_elt_t *headers;
+  ngx_uint_t i = 0;
+  ngx_uint_t need_comma = 0;
+  
+  static ngx_str_t headers_key = ngx_string( "headers" );
+  json_write_string_literal(j, &headers_key);
+  json_write_char(j, ':' );
+  json_write_char(j, '[' );  
+  for (header_part = &(r->headers_in.headers.part); header_part; header_part = header_part->next) {
+    headers = header_part->elts;
+    for (i = 0; i < header_part->nelts; i++) {
+      if (need_comma) {
+        json_write_char(j, ',');
+      }
+      
+      json_kv_string_t header_fields[] = {
+        { ngx_string( "header" ), headers[i].key, 0 },
+        { ngx_string( "value" ), headers[i].value, 0 },
+        { ngx_null_string, ngx_null_string, 0 }        
+      };
+      json_write_char(j, '{');
+      json_write_kv_strings(j, header_fields);
+      json_write_char(j, '}');
+      need_comma = 1;
+    }
+  }
+  json_write_char(j, ']' );  
+}
+
+/* Write the contents of the body, up to the given size, as a 
+   JSON literal string. If the content is truncated,
+   indicate this by a "truncated" field giving the truncated size. */
+static void
+ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
+  uintptr_t sz;
+  ngx_chain_t  *in;
+  static unsigned char *unescaped, *dst;
+  static unsigned char *file_buf = NULL;
+  size_t unescaped_len = 0;
+  size_t mirrored = 0;  /* must be <= max_size */
+  size_t truncated = 0; 
+  static ngx_str_t body_key = ngx_string( "body" );
+  static ngx_str_t truncated_key = ngx_string( "truncated" );
+  
+  json_write_string_literal( j, &body_key );
+  json_write_char( j, ':' );
+  json_write_char( j, '"' );
+
+  if (r->request_body == NULL) {
+    json_write_char( j, '"' );
+    return;
+  }
+  
+  for (in = r->request_body->bufs; in; in = in->next) {
+    /* Add up size after hitting limit*/
+    if (truncated > 0) {
+      truncated += ngx_buf_size(in->buf);
+      continue;
+    }
+    if (ngx_buf_in_memory(in->buf)) {
+      unescaped = in->buf->pos;
+      unescaped_len = in->buf->last - in->buf->pos;
+
+      /* Trim to maximum size, flag truncation. */
+      if (mirrored + unescaped_len > max_size) {
+        truncated = mirrored + unescaped_len;
+        unescaped_len = max_size - mirrored;
+      }
+    } else if (in->buf->in_file) {
+      /* Allocate a buffer and read only as much as we need from the file */
+      unescaped_len = in->buf->file_last - in->buf->file_pos;
+
+      if (mirrored + unescaped_len > max_size) {
+        truncated = mirrored + unescaped_len;
+        unescaped_len = max_size - mirrored;
+      }
+
+      /* Allocate a buffer; don't bother clearing it? */
+      file_buf = ngx_palloc(r->connection->pool, unescaped_len);
+      if (file_buf == NULL) {
+        j->oom = 1;
+        return;
+      }
+
+      /* TODO: this is blocking, but I don't know how to go through the
+       * event system to make it nonblocking. */
+      ngx_read_file( in->buf->file, file_buf, unescaped_len, in->buf->file_pos );
+      unescaped = file_buf;
+    } else if (in->buf->last_buf) {
+      break;
+    } else {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state");
+      break;
+    }
+
+    sz = ngx_escape_json( NULL, unescaped, unescaped_len );
+    dst = json_ensure_space( j, unescaped_len + sz );
+    if (dst == NULL) {
+      return;
+    }
+    dst = (unsigned char *)ngx_escape_json( dst, unescaped, unescaped_len );
+    mirrored += unescaped_len;
+    j->content_length += (unescaped_len + sz);
+    j->tail->buf->last = dst;
+
+    if (file_buf != NULL) {
+      /* If the buffer was large enough, return it to the system allocator */
+      ngx_pfree(r->connection->pool, file_buf);
+      file_buf = NULL;
+    }
+  }
+
+  json_write_char( j, '"' );
+
+  if (truncated > 0) {
+    json_write_char(j, ',');
+    json_write_string_literal(j, &truncated_key);
+    json_write_char(j, ':');
+    json_write_uint_literal(j, truncated);
+  }
 }
 
 /* Set the input (request body) content size on a request. */
@@ -314,11 +435,31 @@ ngx_akita_set_json_content_type(ngx_http_request_t *r) {
   return NGX_OK;
 }
 
+
+/* Top-level functions */
+
+/* Initialize the Akita client based on the current configuration. */
+ngx_int_t
+ngx_akita_client_init(ngx_conf_t *cf) {
+  ngx_str_t name = ngx_string("request_id");
+
+  /* Cache the index of the $request_id variable */
+  ngx_request_id_index = ngx_http_get_variable_index(cf, &name);
+  if (ngx_request_id_index == NGX_ERROR) {
+    ngx_log_error( NGX_LOG_ERR, cf->log, 0,
+                   "Can't find 'request_id` variable." );
+    return NGX_ERROR;
+  }
+
+  return NGX_OK;
+}
+
 static ngx_str_t post_method = ngx_string("POST");
 
 ngx_int_t
 ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
                             ngx_http_akita_ctx_t *ctx,
+                            ngx_http_akita_loc_conf_t *config,
                             ngx_http_post_subrequest_t *callback) {
   json_data_t *j;
   ngx_str_t request_id;
@@ -332,7 +473,7 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
     return NGX_ERROR;
   }
   
-  rc = akita_get_request_id(r, &request_id );
+  rc = ngx_akita_get_request_id(r, &request_id );
   if (rc != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Could not get request ID" );
@@ -356,18 +497,23 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   json_write_char( j, '{' );
   json_write_kv_strings( j, string_fields );
   json_write_char( j, ',' );
-  
+
+  ngx_akita_write_request_headers( j, r );
+  json_write_char( j, ',' );
+    
   static ngx_str_t request_start_key = ngx_string("request_start");
   static ngx_str_t request_arrived_key = ngx_string("request_arrived");
   json_write_string_literal( j, &request_start_key );
   json_write_char( j, ':' );
-  json_write_time_literal( j, &ctx->request_start );
-  
+  json_write_time_literal( j, &ctx->request_start );  
   json_write_char( j, ',' );
+  
   json_write_string_literal( j, &request_arrived_key );
   json_write_char( j, ':' );
   json_write_time_literal( j, &ctx->request_arrived );
-
+  json_write_char( j, ',' );
+                            
+  ngx_akita_write_body( j, r, config->max_body_size );
   json_write_char( j, '}' );
 
   if (j->oom) {
