@@ -682,7 +682,8 @@ ngx_akita_send_response_headers(ngx_http_request_t *r, ngx_str_t agent_path,
 
   /* The -1 value indicates absence */
   if (r->headers_out.last_modified_time >= 0) {
-    buf = ngx_pcalloc(r->connection->pool, sizeof("Last-Modified: Mon, 28 Sep 1970 06:00:00 GMT" CRLF) - 1 );
+    /* Leave space for a full-sized timestamp but leave the \0 off the end. */
+    buf = ngx_pcalloc(r->connection->pool, sizeof("Mon, 28 Sep 1970 06:00:00 GMT") - 1 ); 
     internal_headers[2].value.data = buf;
     internal_headers[2].value.len = ngx_http_time(buf, r->headers_out.last_modified_time) - buf;
     internal_headers[2].omit = 0;
