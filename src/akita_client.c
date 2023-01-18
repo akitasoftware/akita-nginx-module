@@ -23,6 +23,7 @@ static void json_write_string_literal( json_data_t *buf, ngx_str_t *str );
 static void json_write_time_literal( json_data_t *buf, struct timeval *tm  );
 static void json_write_uint_literal( json_data_t *buf, ngx_uint_t n );
 static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...);
+static ngx_int_t json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *total_size, ngx_buf_t *buf);
 
 /* A key and string value to write into a JSON object */
 typedef struct json_kv_string_s {
@@ -294,18 +295,88 @@ ngx_akita_write_headers_list(json_data_t *j, ngx_list_t *headers_list ) {
   json_write_char(j, ']' );  
 }
 
+/*
+ * Write the buffer to a JSON string literal.
+ * Assumes the quotes have already been added.
+ * Update total_size with the actual size, and limit
+ * the pre-escaped length to max_size.
+ */
+static ngx_int_t
+json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *total_size, ngx_buf_t *buf) {
+  unsigned char *unescaped, *dst;
+  size_t unescaped_len = 0;
+  unsigned char *file_buf = NULL;
+  ssize_t num_read;
+  uintptr_t sz;
+
+  /* If at max size, record length */
+  if (*total_size >= max_size) {
+    *total_size += ngx_buf_size(buf);
+    return NGX_OK;
+  }
+
+  unescaped_len = ngx_buf_size(buf);
+  /* Truncate if over max size */
+  if (*total_size + unescaped_len > max_size) {
+    unescaped_len = max_size - *total_size;
+  }
+  /* Record the real size */
+  *total_size += ngx_buf_size(buf);
+ 
+  if (ngx_buf_in_memory(buf)) {
+    unescaped = buf->pos;
+  } else if (buf->in_file) {
+    /* Allocate a buffer; don't bother clearing it. */
+    file_buf = ngx_palloc(r->connection->pool, unescaped_len);
+    if (file_buf == NULL) {
+      return NGX_ERROR;
+    }
+    
+    /* TODO: this is blocking, but hooking into the event system
+     * to read it in a non-blocking fashion seems difficult. */
+    num_read = ngx_read_file( buf->file, file_buf, unescaped_len, buf->file_pos );
+    if (num_read < 0) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
+                    "Couldn't read buffered file");
+      return NGX_ERROR;
+    }
+    unescaped = file_buf;
+  } else if (buf->last_buf) {
+    /* Empty buf allowed at the end of a chain */
+    return NGX_OK;
+  } else {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state");
+    return NGX_ERROR;
+  }
+
+  sz = ngx_escape_json(NULL, unescaped, unescaped_len);
+  dst = json_ensure_space(j, unescaped_len  +sz);
+  if (dst == NULL) {
+    return NGX_ERROR;
+  }
+  dst = (unsigned char *)ngx_escape_json(dst, unescaped, unescaped_len);
+  j->content_length += (unescaped_len + sz);
+  j->tail->buf->last = dst;
+
+  if (file_buf != NULL) {
+    /*
+     * If the buffer was large enough, return it to the system allocator.
+     * If too small, this is a no-op.
+     */
+    ngx_pfree(r->connection->pool, file_buf);
+    file_buf = NULL;
+  }
+  
+  return NGX_OK;
+}
+
 /* Write the contents of the body, up to the given size, as a 
    JSON literal string. If the content is truncated,
    indicate this by a "truncated" field giving the truncated size. */
 static void
 ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
-  uintptr_t sz;
-  ngx_chain_t  *in;
-  static unsigned char *unescaped, *dst;
-  static unsigned char *file_buf = NULL;
-  size_t unescaped_len = 0;
-  size_t mirrored = 0;  /* must be <= max_size */
-  size_t truncated = 0; 
+  ngx_chain_t *in;
+  size_t total_size = 0; 
   static ngx_str_t body_key = ngx_string( "body" );
   static ngx_str_t truncated_key = ngx_string( "truncated" );
   
@@ -319,71 +390,20 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
   }
   
   for (in = r->request_body->bufs; in; in = in->next) {
-    /* Add up size after hitting limit*/
-    if (truncated > 0) {
-      truncated += ngx_buf_size(in->buf);
-      continue;
-    }
-    if (ngx_buf_in_memory(in->buf)) {
-      unescaped = in->buf->pos;
-      unescaped_len = in->buf->last - in->buf->pos;
-
-      /* Trim to maximum size, flag truncation. */
-      if (mirrored + unescaped_len > max_size) {
-        truncated = mirrored + unescaped_len;
-        unescaped_len = max_size - mirrored;
-      }
-    } else if (in->buf->in_file) {
-      /* Allocate a buffer and read only as much as we need from the file */
-      unescaped_len = in->buf->file_last - in->buf->file_pos;
-
-      if (mirrored + unescaped_len > max_size) {
-        truncated = mirrored + unescaped_len;
-        unescaped_len = max_size - mirrored;
-      }
-
-      /* Allocate a buffer; don't bother clearing it? */
-      file_buf = ngx_palloc(r->connection->pool, unescaped_len);
-      if (file_buf == NULL) {
-        j->oom = 1;
-        return;
-      }
-
-      /* TODO: this is blocking, but I don't know how to go through the
-       * event system to make it nonblocking. */
-      ngx_read_file( in->buf->file, file_buf, unescaped_len, in->buf->file_pos );
-      unescaped = file_buf;
-    } else if (in->buf->last_buf) {
-      break;
-    } else {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state");
-      break;
-    }
-
-    sz = ngx_escape_json( NULL, unescaped, unescaped_len );
-    dst = json_ensure_space( j, unescaped_len + sz );
-    if (dst == NULL) {
+    if (json_escape_buf(j, r, max_size, &total_size, in->buf) != NGX_OK) {
+      /* TODO: a better way of signalling the error */
+      j->oom = 1;
       return;
-    }
-    dst = (unsigned char *)ngx_escape_json( dst, unescaped, unescaped_len );
-    mirrored += unescaped_len;
-    j->content_length += (unescaped_len + sz);
-    j->tail->buf->last = dst;
-
-    if (file_buf != NULL) {
-      /* If the buffer was large enough, return it to the system allocator */
-      ngx_pfree(r->connection->pool, file_buf);
-      file_buf = NULL;
-    }
+    }    
   }
 
   json_write_char( j, '"' );
 
-  if (truncated > 0) {
+  if (total_size > max_size) {
     json_write_char(j, ',');
     json_write_string_literal(j, &truncated_key);
     json_write_char(j, ':');
-    json_write_uint_literal(j, truncated);
+    json_write_uint_literal(j, total_size);
   }
 }
 
@@ -593,10 +613,8 @@ typedef struct ngx_akita_internal_header_s {
 } ngx_akita_internal_header_t;
 
 ngx_int_t
-ngx_akita_send_response_headers(ngx_http_request_t *r, ngx_str_t agent_path,
-                                ngx_http_akita_ctx_t *ctx,
-                                ngx_http_akita_loc_conf_t *config,
-                                ngx_http_post_subrequest_t *callback) {
+ngx_akita_start_response_body(ngx_http_request_t *r, 
+                              ngx_http_akita_ctx_t *ctx) {
   u_char *buf;
   json_data_t *j;
   ngx_str_t request_id;
@@ -708,9 +726,13 @@ ngx_akita_send_response_headers(ngx_http_request_t *r, ngx_str_t agent_path,
   static ngx_str_t response_start_key = ngx_string("response_start");
   json_write_string_literal( j, &response_start_key );
   json_write_char( j, ':' );
-  json_write_time_literal( j, &ctx->response_start );  
-
-  json_write_char( j, '}' );
+  json_write_time_literal( j, &ctx->response_start );
+  json_write_char( j, ',' );
+  
+  static ngx_str_t body_key = ngx_string( "body" );
+  json_write_string_literal( j, &body_key );
+  json_write_char( j, ':' );
+  json_write_char( j, '"' );
 
   if (j->oom) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
@@ -718,6 +740,73 @@ ngx_akita_send_response_headers(ngx_http_request_t *r, ngx_str_t agent_path,
     return NGX_ERROR;
   }
 
+  /* 
+   * Set up context for rest of body.
+   * The body filter is called even when content length is zero or
+   * the response is a 204.
+   */
+  ctx->response_json = j;
+  ctx->response_body_size = 0;
+
+  return NGX_OK;
+}
+
+ngx_int_t
+ngx_akita_append_response_body(ngx_http_request_t *r,
+                               ngx_http_akita_ctx_t *ctx,
+                               ngx_http_akita_loc_conf_t *config,
+                               ngx_buf_t *buf) {
+  ngx_int_t err;
+  err = json_escape_buf(ctx->response_json, r,
+                        config->max_body_size,
+                        &ctx->response_body_size,
+                        buf);
+  if (err != NGX_OK) {
+    return err;
+  }
+  if (ctx->response_json->oom) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "JSON body got out-of-memory" );
+    return NGX_ERROR;
+  }
+  return NGX_OK;
+}
+
+ngx_int_t
+ngx_akita_finish_response_body(ngx_http_request_t *r,
+                               ngx_str_t agent_path,
+                               ngx_http_akita_ctx_t *ctx,
+                               ngx_http_akita_loc_conf_t *config,
+                               ngx_http_post_subrequest_t *callback) {
+  json_data_t *j = ctx->response_json;
+
+  /* Finish the literal that contains the response body */
+  json_write_char( j, '"' );
+  json_write_char( j, ',' );
+
+  /* Mark if the body was truncated, and its actual size */
+  if (ctx->response_body_size > config->max_body_size) {
+    static ngx_str_t truncated_key = ngx_string( "truncated" );
+    json_write_char(j, ',');
+    json_write_string_literal(j, &truncated_key);
+    json_write_char(j, ':');
+    json_write_uint_literal(j, ctx->response_body_size);
+    json_write_char( j, ',' );
+  }
+  
+  static ngx_str_t response_start_key = ngx_string("response_complete");
+  json_write_string_literal( j, &response_start_key );
+  json_write_char( j, ':' );
+  json_write_time_literal( j, &ctx->response_complete );
+
+  json_write_char( j, '}' );
+  
+  if (j->oom) {
+    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                   "JSON body got out-of-memory" );
+    return NGX_ERROR;
+  }
+  
   /* Mark end of body */
   j->tail->buf->last_buf = 1;
 

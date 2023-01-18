@@ -19,14 +19,20 @@ typedef struct {
 
   /* Whether the agent is enabled in this location */
   ngx_flag_t enabled;
-  
+
 } ngx_http_akita_loc_conf_t;
+
+/* Forward declaration of JSON buffer */
+struct json_data_s;
 
 /* Context for a particular HTTP request */
 typedef struct {
   /* Have we already handled this request? */
   ngx_int_t      status;
 
+  /* Continue processing this request? */
+  ngx_flag_t      enabled;
+  
   /* Time when request is first observed and when its body is available */
   struct timeval request_start;
   struct timeval request_arrived;
@@ -35,7 +41,11 @@ typedef struct {
   struct timeval response_start;
   struct timeval response_complete;
   
-  /* TODO: Buffered response data. */
+  /* JSON buffer holding the Akita API call for a response body. 
+   * The response filter can write escaped data to it until the end of body 
+   * or the body size limit. */
+  struct json_data_s *response_json;
+  size_t response_body_size;
 } ngx_http_akita_ctx_t;
 
 #endif /* _NGX_HTTP_AKITA_MODULE_H_INCLUDED */
