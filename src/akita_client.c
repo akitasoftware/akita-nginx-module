@@ -21,7 +21,7 @@ static unsigned char * json_ensure_space( json_data_t *buf, ngx_uint_t size );
 static void json_write_char( json_data_t *buf, unsigned char c );
 static void json_write_string_literal( json_data_t *buf, ngx_str_t *str );
 static void json_write_time_literal( json_data_t *buf, struct timeval *tm  );
-static void json_write_uint_literal( json_data_t *buf, ngx_uint_t n );
+static void json_write_uint_property( json_data_t *buf, ngx_str_t *key, ngx_uint_t n );
 static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...);
 static ngx_int_t json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *total_size, ngx_buf_t *buf);
 
@@ -162,10 +162,12 @@ static void json_snprintf(json_data_t *j, size_t max_len, const char *fmt, ...) 
   j->tail->buf->last = end;  
 }
 
-/* Write an unsigned integer to the JSON buffer.
+/* Write a key and an unsigned integer to the JSON buffer.
    Sets 'j->oom' if an error occurs. */
-static void json_write_uint_literal(json_data_t *j, ngx_uint_t n) {
+static void json_write_uint_property(json_data_t *j, ngx_str_t *key, ngx_uint_t n) {  
   const int max_decimal_len = 20; /* handles 64-bit unsigned */
+  json_write_string_literal(j, key);
+  json_write_char(j, ':');
   json_snprintf(j, max_decimal_len, "%ud", n);
 }
 
@@ -401,9 +403,7 @@ ngx_akita_write_body(json_data_t *j, ngx_http_request_t *r, size_t max_size ) {
 
   if (total_size > max_size) {
     json_write_char(j, ',');
-    json_write_string_literal(j, &truncated_key);
-    json_write_char(j, ':');
-    json_write_uint_literal(j, total_size);
+    json_write_uint_property(j, &truncated_key, total_size);
   }
 }
 
@@ -647,10 +647,7 @@ ngx_akita_start_response_body(ngx_http_request_t *r,
   json_write_char( j, ',' );
 
   static ngx_str_t response_code_key = ngx_string( "response_code" );
-  json_write_string_literal(j, &response_code_key);
-  json_write_char(j, ':');
-  json_write_uint_literal(j, r->headers_out.status);
-  json_write_char(j, ',');
+  json_write_uint_property(j, &response_code_key, r->headers_out.status);
 
   /* Nginx-written headers are not present, nor are the ones from 
    * the upstream response that will be overwritten?  See
@@ -787,10 +784,7 @@ ngx_akita_finish_response_body(ngx_http_request_t *r,
   /* Mark if the body was truncated, and its actual size */
   if (ctx->response_body_size > config->max_body_size) {
     static ngx_str_t truncated_key = ngx_string( "truncated" );
-    json_write_char(j, ',');
-    json_write_string_literal(j, &truncated_key);
-    json_write_char(j, ':');
-    json_write_uint_literal(j, ctx->response_body_size);
+    json_write_uint_property(j, &truncated_key, ctx->response_body_size);
     json_write_char( j, ',' );
   }
   
