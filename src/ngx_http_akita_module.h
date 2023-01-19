@@ -14,6 +14,9 @@ typedef struct {
   /* The network address for the Akita agent REST API.*/  
   ngx_str_t agent_address;
 
+  /* The upstream configuration created for agent_address. */
+  ngx_http_upstream_conf_t upstream;
+
   /* The max size of a body to send to the Akita agent */
   size_t max_body_size;
 

@@ -5,23 +5,17 @@
 #include <ngx_http_request.h>
 #include "akita_client.h"
 
-static ngx_int_t
-ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc );
-static void *
-ngx_http_akita_create_loc_conf(ngx_conf_t *cf);
-static char *
-ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
-static ngx_int_t
-ngx_http_akita_precontent_handler(ngx_http_request_t *r);
-static ngx_int_t
-ngx_http_akita_response_header_filter(ngx_http_request_t *r);
-static ngx_int_t
-ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
-static ngx_int_t
-ngx_http_akita_init(ngx_conf_t *cf);
+static ngx_int_t ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc );
+static void * ngx_http_akita_create_loc_conf(ngx_conf_t *cf);
+static char * ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+static ngx_int_t ngx_http_akita_precontent_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_akita_response_header_filter(ngx_http_request_t *r);
+static ngx_int_t ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
+static ngx_int_t ngx_http_akita_init(ngx_conf_t *cf);
 
 static const ngx_uint_t default_max_body = 1 * 1024 * 1024;
 static const char default_agent_address[] = "localhost:50800";
+static const char *upstream_module_name = "akita";
 
 /* Create the Akita configuration.
  *
@@ -38,6 +32,8 @@ ngx_http_akita_create_loc_conf(ngx_conf_t *cf) {
 
   conf->max_body_size = NGX_CONF_UNSET_SIZE;
   conf->enabled = NGX_CONF_UNSET;
+  ngx_str_set(&conf->upstream.module, upstream_module_name);
+
   return conf;
 }
 
@@ -50,17 +46,101 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   ngx_conf_merge_str_value(conf->agent_address, prev->agent_address, default_agent_address);
   ngx_conf_merge_size_value(conf->max_body_size, prev->max_body_size, default_max_body);
   ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
+
+  /* 
+   * There are a whole pile of configuration options available for
+   * the upstream call to Akita. We're going to default as many of
+   * them to the same value that proxy_pass sets up, in 
+   * ngx_http_proxy_merge_loc_conf, because we know those settings work. 
+   * Some depend on compilation options. 
+   */
+  conf->upstream.store = 0;
+  conf->upstream.buffering = 1;
+  conf->upstream.request_buffering = 1;
+  conf->upstream.ignore_client_abort = 0;
+  conf->upstream.force_ranges = 0;
+  conf->upstream.local = NULL;
+  conf->upstream.socket_keepalive = 0;
+  /* TODO: these seem kind of long, reduce? */
+  conf->upstream.connect_timeout = 60000;  /* Connection timeout in ms */
+  conf->upstream.send_timeout = 60000;
+  conf->upstream.read_timeout = 60000;
+  conf->upstream.next_upstream_timeout = 0;
+  conf->upstream.send_lowat = 0;
+  conf->upstream.buffer_size = (size_t)ngx_pagesize;
+  conf->upstream.limit_rate = 0;
+  conf->upstream.bufs.num = 8;
+  conf->upstream.bufs.size=(size_t)ngx_pagesize;
+  conf->upstream.busy_buffers_size_conf = 2 * conf->upstream.buffer_size;
+  conf->upstream.busy_buffers_size = 2 * conf->upstream.buffer_size;
+  conf->upstream.temp_file_write_size_conf = 2 * conf->upstream.buffer_size;
+  conf->upstream.temp_file_write_size = 2 * conf->upstream.buffer_size;
+  conf->upstream.max_temp_file_size_conf = 0; /* disabled, no temp files */
+  conf->upstream.max_temp_file_size = 0;
+  conf->upstream.ignore_headers = NGX_CONF_BITMASK_SET;
+  conf->upstream.next_upstream = (NGX_CONF_BITMASK_SET
+                                  |NGX_HTTP_UPSTREAM_FT_ERROR
+                                  |NGX_HTTP_UPSTREAM_FT_TIMEOUT);
+  /* conf->upstream.temp_path left unset */
+#if (NGX_HTTP_CACHE)
+  conf->upstream.cache = 0;
+  /* all other cache settings left unset */  
+#endif
+
+  /* These settings will, I think, apply to the subrequest we create */
+  conf->upstream.pass_request_headers = 1;
+  conf->upstream.pass_request_body = 1;
+  conf->upstream.intercept_errors = 0;
+
+#if (NGX_HTTP_SSL)
+  conf->upstream.ssl = NULL;
+  /* all other SSL settings left unset */
+#endif
+
   return NGX_CONF_OK;
 }
+
+static char *
+ngx_http_akita_agent(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+  ngx_str_t *value;
+  ngx_url_t u;
+  ngx_http_akita_loc_conf_t *akita_conf = conf;
+
+  if (akita_conf->upstream.upstream) {
+    /* The error message is '"akita_agent" directive <return value>' in <file location>' */
+    return "is duplicate";
+  }
+  
+  value = cf->args->elts;
+  value = &value[1]; /* I don't know why this is correct. */
+  
+  /* Construct a URL to hold the agent address. */
+  /* TODO: check for unnecessary http? */
+  ngx_memzero(&u, sizeof(ngx_url_t));
+  u.url.len = value->len;
+  u.url.data = value->data;
+  u.default_port = 50080; /* if no port specified */  
+  u.uri_part = 1;
+  u.no_resolve = 1; /* defer resolution until needed? */
+
+  /* Create an upstream for the agent.  The configuration is filled in later. */
+  akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u, 0);
+  if (akita_conf->upstream.upstream == NULL) {
+    return NGX_CONF_ERROR;
+  }
+  
+  return NGX_CONF_OK;
+}
+
 
 /* Configuration directives provided by this module. */
 static ngx_command_t ngx_http_akita_commands[] = {
   /* Specifies the network address of the akita agent. */
   { ngx_string("akita_agent"),
     NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-    ngx_conf_set_str_slot,
+    ngx_http_akita_agent,
     NGX_HTTP_LOC_CONF_OFFSET,
-    offsetof( ngx_http_akita_loc_conf_t, agent_address ),
+    0,
     NULL },
   /* Enable mirroring for a location, server, or globally. */
   { ngx_string("akita_enable"),
