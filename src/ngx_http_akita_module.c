@@ -8,6 +8,7 @@
 static ngx_int_t ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc );
 static void * ngx_http_akita_create_loc_conf(ngx_conf_t *cf);
 static char * ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+static char * ngx_http_akita_create_upstream(ngx_conf_t *cf, ngx_http_akita_loc_conf_t *akita_conf, ngx_str_t host);
 static ngx_int_t ngx_http_akita_precontent_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_header_filter(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
@@ -97,13 +98,45 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   /* all other SSL settings left unset */
 #endif
 
+  if (conf->upstream.upstream == NULL) {
+    /* Copy the pointer to the upstream that was registered earlier! */
+    conf->upstream = prev->upstream;
+  } else if (conf->enabled) {
+    /* Create a new upstream using the default address */
+    return ngx_http_akita_create_upstream(cf, conf, conf->agent_address);
+  }
+
   return NGX_CONF_OK;
 }
 
 static char *
+ngx_http_akita_create_upstream(ngx_conf_t *cf,
+                               ngx_http_akita_loc_conf_t *akita_conf, ngx_str_t host) {
+  ngx_url_t u;
+
+  /* Construct a URL to hold the agent address. */
+  /* TODO: check for unnecessary http? Or trailing value? */
+  ngx_memzero(&u, sizeof(ngx_url_t));
+  u.url.len = host.len;
+  u.url.data = host.data;
+  u.default_port = 50080; /* if no port specified */  
+  u.uri_part = 1;
+  u.no_resolve = 1; /* defer resolution until needed? */
+
+  /* Create an upstream for the agent.  The rest of the configuration is filled in
+     separately, in merge */
+  akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u, 0);
+  if (akita_conf->upstream.upstream == NULL) {
+    return NGX_CONF_ERROR;
+  }
+  
+  return NGX_CONF_OK;
+}
+
+
+static char *
 ngx_http_akita_agent(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
   ngx_str_t *value;
-  ngx_url_t u;
   ngx_http_akita_loc_conf_t *akita_conf = conf;
 
   if (akita_conf->upstream.upstream) {
@@ -113,23 +146,8 @@ ngx_http_akita_agent(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
   
   value = cf->args->elts;
   value = &value[1]; /* I don't know why this is correct. */
-  
-  /* Construct a URL to hold the agent address. */
-  /* TODO: check for unnecessary http? */
-  ngx_memzero(&u, sizeof(ngx_url_t));
-  u.url.len = value->len;
-  u.url.data = value->data;
-  u.default_port = 50080; /* if no port specified */  
-  u.uri_part = 1;
-  u.no_resolve = 1; /* defer resolution until needed? */
 
-  /* Create an upstream for the agent.  The configuration is filled in later. */
-  akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u, 0);
-  if (akita_conf->upstream.upstream == NULL) {
-    return NGX_CONF_ERROR;
-  }
-  
-  return NGX_CONF_OK;
+  return ngx_http_akita_create_upstream(cf, akita_conf, *value);
 }
 
 
