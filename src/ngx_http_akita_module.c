@@ -151,8 +151,7 @@ ngx_module_t ngx_http_akita_module = {
 /* Temporary location of proxy that sends to the agent. TBR with an upstream */
 /* TODO: move to configuration before that gets done? */
 static ngx_str_t ngx_http_akita_request_location = ngx_string( "/akita/trace/v1/request" );
-static ngx_str_t ngx_http_akita_response_location = ngx_string( "/akita/trace/v1/response/headers" );
-/* static ngx_str_t ngx_http_akita_response_body_location = ngx_string( "/akita/trace/v1/response/body" ); */
+static ngx_str_t ngx_http_akita_response_location = ngx_string( "/akita/trace/v1/response" );
 
 /* Relays a request to the Akita Agent. To indicate that the we are done
  * processing the request, the status in the request's context is set to
@@ -268,127 +267,101 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
   ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "Response code %d from subrequest", rc );
+                 "Return code %d from subrequest, HTTP response %d",
+                 rc,
+                 r->headers_out.status);
   return NGX_OK;
 }
-
-static unsigned char *intro = (unsigned char *)"{ \"headers\" : [";
-static unsigned char *outro = (unsigned char *)"]}";
 
 /* Called when a response is available.
  * Mirrors response status code and headers to the Akita agent.
  */
 static ngx_int_t
 ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
-  ngx_list_part_t *header_part;
-  ngx_table_elt_t *headers;
-  ngx_http_request_t *sr;
-  ngx_uint_t i = 0;
-  ngx_int_t rc;
+  ngx_http_akita_loc_conf_t *akita_config;
+  ngx_http_akita_ctx_t *ctx;
 
   /* Only operate on the main request (in particular, not on our own subrequest!) */
   if ( r != r->main ) {
-    ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                  "Skipping non-main response." );
     return ngx_http_next_header_filter(r);    
   }
-    
-  header_part = &(r->headers_out.headers.part);
-  headers = header_part->elts; 
-  ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                 "Response available with %d headers", header_part->nelts );
 
-  ngx_buf_t *b;
-  ngx_chain_t *out;
-  ngx_chain_t *link;
-  ngx_uint_t content_length = 0;
-  ngx_str_t content_length_str;
-    
-  b = ngx_calloc_buf( r->pool );
-  if ( b == NULL ) {
-    return NGX_ERROR;
-  }
-  b->pos = intro;
-  b->last = intro + ngx_strlen( intro );
-  b->memory = 1;
-  b->last_buf = 0;
-  content_length += ngx_strlen( intro );
-  
-  out = ngx_alloc_chain_link( r->pool );
-  out->buf = b;
-  out->next = NULL;
-
-  /* TODO: copy headers into subrequest chain as JSON */
-  /* Nginx-written headers are not present, nor are the ones from 
-   * the upstream response that will be overwritten?  See
-   * https://forum.nginx.org/read.php?2,225317,225329#msg-225329
-   */
-  for (header_part = &(r->headers_out.headers.part); header_part; header_part = header_part->next) {
-    headers = header_part->elts;
-    for (i = 0; i < header_part->nelts; i++) {
-      ngx_log_error( NGX_LOG_INFO, r->connection->log, 0,
-                     "Response header '%V' value '%V'",
-                     &headers[i].key, &headers[i].value );      
-    }
+  akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
+  if ( akita_config == NULL || !akita_config->enabled ) {    
+    /* Not enabled for this location. */
+    return ngx_http_next_header_filter(r);
   }
 
-  b = ngx_calloc_buf( r->pool );
-  if ( b == NULL ) {
-    return NGX_ERROR;
-  }
-  b->pos = outro;
-  b->last = outro + ngx_strlen( outro );
-  b->memory = 1;
-  b->last_buf = 1;
-  content_length += ngx_strlen( outro );
+  /* Record time when upstream (or nginx) sent its response */
+  ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  ngx_gettimeofday( &ctx->response_start );
+  ctx->enabled = 1;
   
-  link = ngx_alloc_chain_link( r->pool );
-  link->buf = b;
-  link->next = NULL;
-  out->next = link;
-  
-  /* Allocate callback structure from pool */
-  ngx_http_post_subrequest_t *callback = ngx_pcalloc( r->connection->pool, sizeof( ngx_http_post_subrequest_t ) );
-  callback->handler = ngx_http_akita_subrequest_callback;
-  callback->data = NULL;
-
-  /* Send the callback to a new path for now,
-     later replace this by a proper upstream  */ 
-  ngx_str_t query_params = ngx_null_string;
-
-  /* Update the agent with the information we got in the response */
-  rc = ngx_http_subrequest( r,
-                            &ngx_http_akita_response_location,
-                            &query_params,
-                            &sr,
-                            callback,
-                            NGX_HTTP_SUBREQUEST_IN_MEMORY );
-  if ( rc >= NGX_HTTP_SPECIAL_RESPONSE ) {
+  if (ngx_akita_start_response_body(r, ctx) != NGX_OK) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
-                   "Subrequest return code %d", rc );
+                   "Failed to mirror response to Akita agent." );
+    ctx->enabled = 0;
   }
-
-  sr->request_body = ngx_pcalloc( r-> pool, sizeof(ngx_http_request_body_t) );
-  if ( sr->request_body == NULL ) {
-    return NGX_ERROR;
-  }
-  sr->request_body->bufs = out;
-
-  /* Rewrite the content-length header to match our new body. */
-  content_length_str.data = ngx_pcalloc( r->connection->pool, 20 );
-  content_length_str.len = ngx_snprintf( content_length_str.data, 20, "%d", content_length ) - content_length_str.data;
-  
-  /* TODO: check if absent */
-  sr->headers_in.content_length->hash = 1;
-  sr->headers_in.content_length->value.data = content_length_str.data;    
-  sr->headers_in.content_length->value.len = content_length_str.len;    
-  sr->headers_in.content_length_n = content_length;
   
   return ngx_http_next_header_filter(r);
 }
 
 static ngx_int_t
 ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
-  /* TODO: mirror response in a subrequest. */
+  ngx_http_akita_loc_conf_t *akita_config;
+  ngx_http_akita_ctx_t *ctx;
+  ngx_chain_t *curr;
+  ngx_http_post_subrequest_t *callback;
+  
+  if ( r != r->main ) {
+    return ngx_http_next_body_filter(r, chain);
+  }
+  
+  akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
+  if ( akita_config == NULL || !akita_config->enabled ) {    
+    /* Not enabled for this location. */
+    return ngx_http_next_body_filter(r, chain);
+  }
+
+  ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  if ( ctx == NULL || !ctx->enabled) {
+    return ngx_http_next_body_filter(r, chain);
+  }
+  
+  for (curr = chain; curr != NULL; curr = curr->next ) {
+    if (ngx_akita_append_response_body(r, ctx, akita_config, curr->buf) != NGX_OK) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Failed to append body to Akita API call.");
+      /* Don't process the rest of the body (and potentially cause a splice.) */
+      ctx->enabled = 0;
+      /* Always call the next filter, even if we have an error */
+      break;
+    }
+        
+    if (curr->buf->last_buf) {
+      ngx_gettimeofday(&ctx->response_complete);
+
+      /* Allocate a callback struct to get the status code */
+      callback = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_post_subrequest_t));
+      if (callback == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "Failed to allocate callback");
+        ctx->enabled = 0;
+        break;
+      }
+      callback->handler = ngx_http_akita_subrequest_callback;
+      callback->data = NULL;
+      if (ngx_akita_finish_response_body(r, ngx_http_akita_response_location,
+                                         ctx,
+                                         akita_config,
+                                         callback) != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "Failed to mirror response to Akita agent");
+        ctx->enabled = 0;
+      }
+      break;      
+    }   
+  }
+  
   return ngx_http_next_body_filter(r, chain);
 }
