@@ -51,7 +51,11 @@ ngx_akita_append_response_body(ngx_http_request_t *r,
                                ngx_http_akita_loc_conf_t *config,
                                ngx_buf_t *);
 
-/* Finish sending the response body to Akita */
+/*
+ * Finish sending the response body to Akita, using the partially
+ * assembled JSON body in ctx->json_response. Create a new subrequest
+ * of the original request r, and send it to agent_path. 
+ */
 ngx_int_t
 ngx_akita_finish_response_body(ngx_http_request_t *r,
                                ngx_str_t agent_path,
