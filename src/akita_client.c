@@ -312,7 +312,7 @@ json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *
   size_t unescaped_len = 0;
   unsigned char *file_buf = NULL;
   ssize_t num_read;
-  uintptr_t sz;
+  uintptr_t size_delta;
 
   /* If at max size, record length */
   if (*total_size >= max_size) {
@@ -354,13 +354,13 @@ json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *
     return NGX_ERROR;
   }
 
-  sz = ngx_escape_json(NULL, unescaped, unescaped_len);
-  dst = json_ensure_space(j, unescaped_len  +sz);
+  size_delta = ngx_escape_json(NULL, unescaped, unescaped_len);
+  dst = json_ensure_space(j, unescaped_len + size_delta);
   if (dst == NULL) {
     return NGX_ERROR;
   }
   dst = (unsigned char *)ngx_escape_json(dst, unescaped, unescaped_len);
-  j->content_length += (unescaped_len + sz);
+  j->content_length += (unescaped_len + size_delta);
   j->tail->buf->last = dst;
 
   if (file_buf != NULL) {
@@ -651,6 +651,7 @@ ngx_akita_start_response_body(ngx_http_request_t *r,
 
   static ngx_str_t response_code_key = ngx_string( "response_code" );
   json_write_uint_property(j, &response_code_key, r->headers_out.status);
+  json_write_char( j, ',' );
 
   /* Nginx-written headers are not present, nor are the ones from 
    * the upstream response that will be overwritten?  See

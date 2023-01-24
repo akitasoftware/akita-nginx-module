@@ -312,7 +312,6 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
   ngx_http_akita_ctx_t *ctx;
   ngx_chain_t *curr;
   ngx_http_post_subrequest_t *callback;
-
   
   if ( r != r->main ) {
     return ngx_http_next_body_filter(r, chain);
@@ -346,7 +345,8 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
       callback = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_post_subrequest_t));
       if (callback == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "Failed to allocate callback");    
+                      "Failed to allocate callback");
+        ctx->enabled = 0;
         break;
       }
       callback->handler = ngx_http_akita_subrequest_callback;
@@ -357,6 +357,7 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
                                          callback) != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "Failed to mirror response to Akita agent");
+        ctx->enabled = 0;
       }
       break;      
     }   
