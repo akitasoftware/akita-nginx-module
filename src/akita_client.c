@@ -435,40 +435,6 @@ ngx_akita_set_json_content_type(ngx_http_request_t *r) {
   return NGX_OK;
 }
 
-/* Callbacks from upstream */
-static ngx_int_t
-ngx_http_akita_create_request(ngx_http_request_t *r) {
-  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                "create upstream request");
-  return NGX_OK;
-}
-
-static ngx_int_t
-ngx_http_akita_reinit_request(ngx_http_request_t *r) {
-  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                "reinit upstream request");
-  return NGX_OK;
-}
-
-static ngx_int_t
-ngx_http_akita_process_status_line(ngx_http_request_t *r) {
-  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                "process upstream response status line");
-  return NGX_OK;
-}
-
-static void
-ngx_http_akita_abort_request(ngx_http_request_t *r) {
-  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                "abort upstream request");
-}
-
-static void
-ngx_http_akita_finalize_request(ngx_http_request_t *r, ngx_int_t rc) {
-  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                "finalize_upstream_request");
-}
-
 /* Top-level functions */
 
 /* Initialize the Akita client based on the current configuration. */
@@ -498,7 +464,7 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   ngx_str_t request_id;
   ngx_int_t rc;
   ngx_http_request_t *subreq;
-  ngx_http_upstream_t *u;
+  ngx_http_akita_ctx_t *subreq_ctx;
   
   j = json_alloc( r->connection->pool );
   if (j == NULL) {
@@ -584,28 +550,6 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
     return NGX_ERROR;
   }
   subreq->request_body->bufs = j->chain;
-
-  /* Assign the subrequest to an upstream here.
-   * TODO: probably this neesd to be done in a handler that processes
-   * the subrequest instead?
-   *
-   * http_upstream_create overwrites headers_in.content_length_n.
-   */
-  if (ngx_http_upstream_create(subreq) != NGX_OK) {
-    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
-                   "Could not assign upstream." );    
-    return NGX_ERROR;
-  }
-  u = subreq->upstream;
-  ngx_str_set(&u->schema, "http://");
-  u->conf = &config->upstream;
-
-  u->create_request = ngx_http_akita_create_request;
-  u->reinit_request = ngx_http_akita_reinit_request;
-  u->process_header = ngx_http_akita_process_status_line;
-  u->abort_request = ngx_http_akita_abort_request;
-  u->finalize_request = ngx_http_akita_finalize_request;
-  r->state = 0; /* proxy_module does this, why? */
   
   /* Replace the existing headers entirely. 
      TODO: what to do about failure here? It seems too late to stop the subrequest. */
@@ -621,6 +565,17 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
     return NGX_ERROR;
   }
 
+  /* Assign the subrequest to the Akita agent which was configured
+   * for this location. We will find this configuration later
+   * and sent it onwawrds.
+   */
+  subreq_ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_akita_ctx_t));
+  if (ctx == NULL) {
+    return NGX_ERROR;
+  }
+  subreq_ctx->subrequest_upstream = &config->upstream;
+  ngx_http_set_ctx(subreq, subreq_ctx, ngx_http_akita_module);
+  
   return NGX_OK;    
 }
 

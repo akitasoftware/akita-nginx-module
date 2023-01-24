@@ -30,11 +30,19 @@ typedef struct {
   /* Have we already handled this request? */
   ngx_int_t      status;
 
+  /* Is this a subrequest that we initiated? If non-null, it is -- so send to 
+     the upstream that is part of the request. (The path may no longer match
+     the location on which we were enabled.) */
+  ngx_http_upstream_conf_t *subrequest_upstream;
+  
   /* Time when request is first observed and when its body is available */
   struct timeval request_start;
   struct timeval request_arrived;
 
   /* TODO: Buffered response data. */
 } ngx_http_akita_ctx_t;
+
+/* The module structure is necessary to access per-module config or context */
+ngx_module_t ngx_http_akita_module;
 
 #endif /* _NGX_HTTP_AKITA_MODULE_H_INCLUDED */

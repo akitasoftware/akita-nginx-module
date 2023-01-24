@@ -13,6 +13,7 @@ static ngx_int_t ngx_http_akita_precontent_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_header_filter(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
 static ngx_int_t ngx_http_akita_init(ngx_conf_t *cf);
+static ngx_int_t ngx_http_akita_send_request_to_upstream(ngx_http_request_t *subreq, ngx_http_upstream_conf_t *upstream);
 
 static const ngx_uint_t default_max_body = 1 * 1024 * 1024;
 static const char default_agent_address[] = "localhost:50800";
@@ -89,6 +90,8 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 #endif
 
   /* These settings will, I think, apply to the subrequest we create */
+  /* TODO: I cannot find where either of these are used by upstream; it looks like only proxy 
+   * modules read them back out. */
   conf->upstream.pass_request_headers = 1;
   conf->upstream.pass_request_body = 1;
   conf->upstream.intercept_errors = 0;
@@ -311,14 +314,23 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
  * Read the request and set up a context to track status. 
  * After the request has been fully read, pass the request on 
  * to the real hander.
+ * 
+ * Also, when we see a subrequest created by ourselves, send
+ * it to the upstream that has been configured for the original location,
  */
 static ngx_int_t
 ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   ngx_http_akita_loc_conf_t *akita_config;
   ngx_http_akita_ctx_t *ctx;
 
-  /* Only execute on the main request, not subrequests */
+  /* Only mirror the main request, not subrequests */
   if (r != r->main) {
+    /* Check if this subrequest was initiated by us */
+    ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module);
+    if (ctx && ctx->subrequest_upstream) {
+      return ngx_http_akita_send_request_to_upstream(r, ctx->subrequest_upstream);
+    }
+    
     return NGX_DECLINED;
   }
 
@@ -485,8 +497,122 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
   return ngx_http_next_header_filter(r);
 }
 
+/* Callbacks from upstream */
+
+static ngx_int_t
+ngx_http_akita_create_request(ngx_http_request_t *r) {
+  ngx_buf_t *b;
+  ngx_chain_t *cl;
+  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "create upstream request");
+
+  /* Create HTTP request string and minimal headers */
+  b = ngx_create_temp_buf(r->pool, sizeof("POST /trace/v1/request HTTP/1.1" CRLF "Content-Tength: 12345678901234567890" CRLF "Content-Type: application/json" CRLF "Host: api.akitasoftware.com" CRLF CRLF ) - 1);
+  if (b == NULL) {
+    return NGX_ERROR;
+  }
+
+  cl = ngx_alloc_chain_link(r->pool);
+  if (cl == NULL) {
+    return NGX_ERROR;
+  }
+
+  b->last = ngx_slprintf(b->pos,b->end, "POST /trace/v1/request HTTP/1.1" CRLF "Content-Length: %d" CRLF "Content-Type: application/json" CRLF "Host: api.akitasoftware.com" CRLF CRLF,
+                         r->headers_in.content_length_n );
+    
+  /* Hook it to the head of the upstream request bufs */
+  cl->buf = b;
+  cl->next = r->upstream->request_bufs;
+  r->upstream->request_bufs = cl;
+  
+  return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_akita_reinit_request(ngx_http_request_t *r) {
+  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "reinit upstream request");
+  return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_akita_process_status_line(ngx_http_request_t *r) {
+  ngx_int_t rc;
+  ngx_http_upstream_t *u;
+  ngx_http_status_t status;
+  ngx_str_t inbound;
+  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "process upstream response status line");
+
+  u = r->upstream;
+  ngx_memzero(&status, sizeof(ngx_http_status_t));
+  rc = ngx_http_parse_status_line(r, &u->buffer, &status );
+  if (rc == NGX_AGAIN) {
+    return rc;
+  }
+
+  if (rc == NGX_ERROR) {
+    inbound.len = ngx_buf_size( &u->buffer );
+    inbound.data = u->buffer.pos;
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "Akita agent did not sent a valid HTTP header: '%V'", &inbound );
+    return NGX_OK;
+  }
+
+  /* Ignore rest of response */
+  u->headers_in.status_n = status.code;
+  u->headers_in.content_length_n = 0;
+  u->buffer.pos = u->buffer.last; // Crashes
+  
+  return NGX_OK;
+}
+
+static void
+ngx_http_akita_abort_request(ngx_http_request_t *r) {
+  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "abort upstream request");
+}
+
+static void
+ngx_http_akita_finalize_request(ngx_http_request_t *r, ngx_int_t rc) {
+  ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "finalize_upstream_request");
+}
+
 static ngx_int_t
 ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
   /* TODO: mirror response in a subrequest. */
   return ngx_http_next_body_filter(r, chain);
+}
+
+
+static ngx_int_t
+ngx_http_akita_send_request_to_upstream(ngx_http_request_t *subreq, ngx_http_upstream_conf_t *upstream_conf) {
+  ngx_http_upstream_t *u;
+  ngx_uint_t content_length;
+  
+  /* Assign the subrequest to the upstream corresponding to the original request.
+   * Note: http_upstream_create overwrites headers_in.content_length_n.
+   */
+  content_length = subreq->headers_in.content_length_n;
+  if (ngx_http_upstream_create(subreq) != NGX_OK) {
+    ngx_log_error( NGX_LOG_ERR, subreq->connection->log, 0,
+                   "Could not assign upstream" );    
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+  subreq->headers_in.content_length_n = content_length;
+
+  u = subreq->upstream;
+  ngx_str_set(&u->schema, "http://");
+  u->conf = upstream_conf;
+
+  u->create_request = ngx_http_akita_create_request;
+  u->reinit_request = ngx_http_akita_reinit_request;
+  u->process_header = ngx_http_akita_process_status_line;
+  u->abort_request = ngx_http_akita_abort_request;
+  u->finalize_request = ngx_http_akita_finalize_request;
+  subreq->state = 0; /* proxy_module does this, why? */
+
+  ngx_http_upstream_init( subreq );
+  return NGX_DONE;
 }
