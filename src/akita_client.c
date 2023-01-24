@@ -300,8 +300,11 @@ ngx_akita_write_headers_list(json_data_t *j, ngx_list_t *headers_list ) {
 /*
  * Write the buffer to a JSON string literal.
  * Assumes the quotes have already been added.
- * Update total_size with the actual size, and limit
- * the pre-escaped length to max_size.
+  * Update total_size with the actual size.
+  * The portion of the buffer that is written to the JSON literal is limited to
+  * max_size - *total_size, as counted before characters are escaped.
+  *
+  * Returns an Nginx error code.
  */
 static ngx_int_t
 json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *total_size, ngx_buf_t *buf) {
