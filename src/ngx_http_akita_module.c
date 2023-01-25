@@ -287,6 +287,9 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
 
   /* Record (approximate) time of last byte of body */
   ctx = ngx_http_get_module_ctx(r, ngx_http_akita_module );
+  if (ctx == NULL) {
+    return;
+  }
   ngx_gettimeofday( &ctx->request_arrived );
 
   /* Allocate callback structure from pool */
