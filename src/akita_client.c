@@ -43,6 +43,7 @@ static ngx_int_t ngx_akita_set_json_content_type(ngx_http_request_t *r);
 static ngx_int_t ngx_akita_send_api_call(ngx_http_request_t *r,
                                          ngx_str_t agent_path,
                                          ngx_http_post_subrequest_t *callback,
+                                         ngx_http_akita_loc_conf_t *config,
                                          ngx_chain_t *body,
                                          size_t content_length);
   
@@ -491,8 +492,6 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   json_data_t *j;
   ngx_str_t request_id;
   ngx_int_t rc;
-  ngx_http_request_t *subreq;
-  ngx_http_akita_ctx_t *subreq_ctx;
   
   j = json_alloc( r->connection->pool );
   if (j == NULL) {
@@ -553,19 +552,22 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   /* Mark end of body */
   j->tail->buf->last_buf = 1;
 
-  return ngx_akita_send_api_call(r, agent_path, callback, j->chain, j->content_length);
+  return ngx_akita_send_api_call(r, agent_path, callback, config, j->chain, j->content_length);
 }
 
 
-/* Create a subrequest with the JSON payload, sent to an internal path. */
+/* Create a subrequest with the JSON payload, sent to the configured upstream
+   with the agent_path as the HTTP path. */
 static ngx_int_t
 ngx_akita_send_api_call(ngx_http_request_t *r,
                         ngx_str_t agent_path,
                         ngx_http_post_subrequest_t *callback,
+                        ngx_http_akita_loc_conf_t *config,
                         ngx_chain_t *body,
                         size_t content_length) {
   ngx_int_t rc;
   ngx_http_request_t *subreq;
+  ngx_http_akita_ctx_t *subreq_ctx;
     
   ngx_str_t query_params = ngx_null_string;
   rc = ngx_http_subrequest( r,
@@ -605,18 +607,18 @@ ngx_akita_send_api_call(ngx_http_request_t *r,
                    "Could not set content type header" );    
     return NGX_ERROR;
   }
+  /* TODO: set Host header here as well? */
 
   /* Assign the subrequest to the Akita agent which was configured
-   * for this location. We will find this configuration later
-   * and sent it onwawrds.
+   * for this location. We will find this context later
+   * and send it onwards to that location.
    */
   subreq_ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_akita_ctx_t));
-  if (ctx == NULL) {
+  if (subreq_ctx == NULL) {
     return NGX_ERROR;
   }
   subreq_ctx->subrequest_upstream = &config->upstream;
   ngx_http_set_ctx(subreq, subreq_ctx, ngx_http_akita_module);
-  
   return NGX_OK;    
   
 }
@@ -820,6 +822,7 @@ ngx_akita_finish_response_body(ngx_http_request_t *r,
   /* Mark end of body */
   j->tail->buf->last_buf = 1;
 
-  return ngx_akita_send_api_call(r, agent_path, callback, j->chain, j->content_length);
+  return ngx_akita_send_api_call(r, agent_path, callback, config,
+                                 j->chain, j->content_length);
 }
 
