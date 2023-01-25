@@ -141,7 +141,7 @@ ngx_http_akita_create_upstream(ngx_conf_t *cf,
   u.no_resolve = 1; /* defer resolution until needed? */
 
   /* Create an upstream for the agent.  The rest of the configuration is filled in
-     separately, in merge */
+     separately, in ngx_http_akita_merge_loc_conf. */
   akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u, 0);
   if (akita_conf->upstream.upstream == NULL) {
     return NGX_CONF_ERROR;
@@ -394,7 +394,7 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
   return NGX_DONE;                 
 } 
 
-/* Logs the status code code from upstream calls to the Akita agent */ 
+/* Logs the return and status codes from upstream calls to the Akita agent. */ 
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
   /* TODO: when it's an error, disable and set a timer (with backoff) to re-enable. */
@@ -580,7 +580,11 @@ ngx_http_akita_agent_create_request(ngx_http_request_t *r) {
     return NGX_ERROR;
   }
 
-  b->last = ngx_slprintf(b->pos,b->end, "POST %V HTTP/1.0" CRLF "Content-Length: %d" CRLF "Content-Type: application/json" CRLF "Host: api.akitasoftware.com" CRLF CRLF,
+  b->last = ngx_slprintf(b->pos,b->end,
+                         "POST %V HTTP/1.0" CRLF
+                         "Content-Length: %d" CRLF
+                         "Content-Type: application/json" CRLF
+                         "Host: api.akitasoftware.com" CRLF CRLF,
                          &r->uri, r->headers_in.content_length_n );
     
   /* Hook it to the head of the upstream request bufs */
