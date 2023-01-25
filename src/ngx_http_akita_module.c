@@ -25,6 +25,7 @@ static void ngx_http_akita_agent_finalize_request(ngx_http_request_t *r, ngx_int
 static const ngx_uint_t default_max_body = 1 * 1024 * 1024;
 static const char default_agent_address[] = "localhost:50800";
 static const char *upstream_module_name = "akita";
+static const in_port_t akita_agent_default_port = 50080;
 
 /* Create the Akita configuration.
  *
@@ -123,7 +124,7 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 
 /* 
  * Create an upstream destination for communicating with the Akita agent.
- * The host name may include a port number; if not the default port 50800
+ * The host name may include a port number; if not the default port 50080
  * will be used.
  */
 static char *
@@ -136,7 +137,7 @@ ngx_http_akita_create_upstream(ngx_conf_t *cf,
   ngx_memzero(&u, sizeof(ngx_url_t));
   u.url.len = host.len;
   u.url.data = host.data;
-  u.default_port = 50080; /* if no port specified */  
+  u.default_port = akita_agent_default_port; /* if no port specified */  
   u.uri_part = 1;
   u.no_resolve = 1; /* defer resolution until needed? */
 
@@ -165,7 +166,7 @@ ngx_http_akita_agent(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
   }
   
   value = cf->args->elts;
-  value = &value[1]; /* I don't know why this is correct. */
+  value = &value[1]; /* elts[0] is the directive name, elts[1] is the sole argument */
 
   return ngx_http_akita_create_upstream(cf, akita_conf, *value);
 }
@@ -565,7 +566,7 @@ ngx_http_akita_agent_create_request(ngx_http_request_t *r) {
    * eventually timing out. I think this might be because the connection is
    * still open but not sure how to set Nginx up to handle it.
    */
-  header_len = sizeof("POST HTTP/1.0" CRLF
+  header_len = sizeof("POST  HTTP/1.0" CRLF
                       "Content-Tength: 12345678901234567890" CRLF
                       "Content-Type: application/json" CRLF
                       "Host: api.akitasoftware.com" CRLF CRLF ) - 1 +
@@ -651,7 +652,8 @@ ngx_http_akita_agent_process_headers(ngx_http_request_t *r) {
             
     if (rc == NGX_OK) {
       /* Handle content-length but ignore other headers. Copy the header data into 
-         a fresh buffer instead of just referencing it in-place.  */
+         a fresh buffer instead of just referencing it in-place.
+         The code here is adapted from ngx_http_proxy_module's upstream handling  */
       if (ngx_strncasecmp( (unsigned char*)"content-length",
                            r->header_name_start,
                            r->header_name_end - r->header_name_start ) == 0 ) {
