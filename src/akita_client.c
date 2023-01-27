@@ -333,7 +333,7 @@ json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *
     unescaped = buf->pos;
   } else if (buf->in_file) {
     /* Allocate a buffer; don't bother clearing it. */
-    file_buf = ngx_palloc(r->connection->pool, unescaped_len);
+    file_buf = ngx_palloc(r->pool, unescaped_len);
     if (file_buf == NULL) {
       return NGX_ERROR;
     }
@@ -369,7 +369,7 @@ json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *
      * If the buffer was large enough, return it to the system allocator.
      * If too small, this is a no-op.
      */
-    ngx_pfree(r->connection->pool, file_buf);
+    ngx_pfree(r->pool, file_buf);
     file_buf = NULL;
   }
   
@@ -424,7 +424,7 @@ ngx_akita_set_request_size(ngx_http_request_t *r, ngx_uint_t content_length) {
    */
   static ngx_str_t content_length_key = ngx_string("Content-Length");  
 
-  content_length_str.data = ngx_pcalloc( r->connection->pool, 20 );
+  content_length_str.data = ngx_pcalloc( r->pool, 20 );
   if (content_length_str.data == NULL) {
     return NGX_ERROR;
   }
@@ -493,7 +493,7 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
   ngx_str_t request_id;
   ngx_int_t rc;
   
-  j = json_alloc( r->connection->pool );
+  j = json_alloc( r->pool );
   if (j == NULL) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Could not allocate JSON buffer" );
@@ -587,7 +587,7 @@ ngx_akita_send_api_call(ngx_http_request_t *r,
   subreq->method_name = post_method;
   subreq->method = NGX_HTTP_POST;
   
-  subreq->request_body = ngx_pcalloc( r->connection->pool,
+  subreq->request_body = ngx_pcalloc( r->pool,
                                   sizeof(ngx_http_request_body_t) );
   if ( subreq->request_body == NULL ) {
     return NGX_ERROR;
@@ -640,7 +640,7 @@ ngx_akita_start_response_body(ngx_http_request_t *r,
   ngx_akita_internal_header_t *int_header;
   ngx_table_elt_t *header;
   
-  j = json_alloc( r->connection->pool );
+  j = json_alloc( r->pool );
   if (j == NULL) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Could not allocate JSON buffer" );
@@ -707,7 +707,7 @@ ngx_akita_start_response_body(ngx_http_request_t *r,
 
   /* The -1 value indicates unknown length */
   if (r->headers_out.content_length_n >= 0) {
-    buf = ngx_pcalloc(r->connection->pool, 20);
+    buf = ngx_pcalloc(r->pool, 20);
     internal_headers[1].value.data = buf;
     internal_headers[1].value.len = ngx_snprintf(buf, 20, "%d", r->headers_out.content_length_n) - buf;
     internal_headers[1].omit = 0;
@@ -716,13 +716,13 @@ ngx_akita_start_response_body(ngx_http_request_t *r,
   /* The -1 value indicates absence */
   if (r->headers_out.last_modified_time >= 0) {
     /* Leave space for a full-sized timestamp but leave the \0 off the end. */
-    buf = ngx_pcalloc(r->connection->pool, sizeof("Mon, 28 Sep 1970 06:00:00 GMT") - 1 ); 
+    buf = ngx_pcalloc(r->pool, sizeof("Mon, 28 Sep 1970 06:00:00 GMT") - 1 ); 
     internal_headers[2].value.data = buf;
     internal_headers[2].value.len = ngx_http_time(buf, r->headers_out.last_modified_time) - buf;
     internal_headers[2].omit = 0;
   }
 
-  ngx_list_init(&extra_headers, r->connection->pool, 3, sizeof(ngx_table_elt_t));
+  ngx_list_init(&extra_headers, r->pool, 3, sizeof(ngx_table_elt_t));
     
   for (int_header = internal_headers; int_header->key.len > 0; int_header++ ) {
     if (!int_header->omit) {

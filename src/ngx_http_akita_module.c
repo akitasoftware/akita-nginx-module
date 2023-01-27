@@ -43,13 +43,17 @@ ngx_http_akita_create_loc_conf(ngx_conf_t *cf) {
   conf->max_body_size = NGX_CONF_UNSET_SIZE;
   conf->enabled = NGX_CONF_UNSET;
   ngx_str_set(&conf->upstream.module, upstream_module_name);
-
+  
+  conf->upstream.hide_headers = NGX_CONF_UNSET_PTR;
+  conf->upstream.pass_headers = NGX_CONF_UNSET_PTR;
+  
   return conf;
 }
 
 /* Merge a parent Akita configuration (global or server) into the child configuration (server or location)  */
 static char *
 ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
+  ngx_hash_init_t hash;
   ngx_http_akita_loc_conf_t *prev = parent;
   ngx_http_akita_loc_conf_t *conf = child;
   
@@ -109,6 +113,19 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   /* all other SSL settings left unset */
 #endif
 
+  /* Ensure header hash table are non-null. */
+  static ngx_str_t empty_header_list[] = {
+    ngx_null_string
+  };
+  hash.max_size = 4;
+  hash.bucket_size = 64;
+  hash.name = "akita_agent_headers_hash";
+  if (ngx_http_upstream_hide_headers_hash
+      (cf, &conf->upstream,
+       &prev->upstream, empty_header_list, &hash) != NGX_OK) {    
+    return NGX_CONF_ERROR;
+  }
+  
   if (conf->upstream.upstream == NULL) {
     if (prev->upstream.upstream != NULL) {
       /* Copy the pointer to the upstream that was registered earlier! */
@@ -294,7 +311,7 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   ngx_gettimeofday( &ctx->request_arrived );
 
   /* Allocate callback structure from pool */
-  ngx_http_post_subrequest_t *callback = ngx_pcalloc(r->connection->pool, sizeof( ngx_http_post_subrequest_t ));
+  ngx_http_post_subrequest_t *callback = ngx_pcalloc(r->pool, sizeof( ngx_http_post_subrequest_t ));
   if (callback == NULL) {
     ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
                    "Failed to allocate callback" );    
@@ -488,7 +505,7 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
       ngx_gettimeofday(&ctx->response_complete);
 
       /* Allocate a callback struct to get the status code */
-      callback = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_post_subrequest_t));
+      callback = ngx_pcalloc(r->pool, sizeof(ngx_http_post_subrequest_t));
       if (callback == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "Failed to allocate callback");
