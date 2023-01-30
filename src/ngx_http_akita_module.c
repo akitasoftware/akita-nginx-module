@@ -134,7 +134,7 @@ static char *
 ngx_http_akita_create_upstream(ngx_conf_t *cf,
                                ngx_http_akita_loc_conf_t *akita_conf, ngx_str_t host) {
   ngx_url_t u;
-  
+
   /* Construct a URL to hold the agent address. */
   /* TODO: check for unnecessary http? Or trailing value? */
   ngx_memzero(&u, sizeof(ngx_url_t));
@@ -152,7 +152,7 @@ ngx_http_akita_create_upstream(ngx_conf_t *cf,
   if (akita_conf->upstream.upstream == NULL) {
     return NGX_CONF_ERROR;
   }
-  /* TODO: I tried configuring the server's max_fails and fail_tiemout, but
+  /* TODO: I tried configuring the server's max_fails and fail_timeout, but
    * the server array is null at this point. Can we populate it? */
   
   return NGX_CONF_OK;
@@ -530,11 +530,13 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
 /* Per-process state: records if we've had a failure communicating with the
  * agent.  If so, we'll suspend further communication until later.
  * 
- * retry_time = time (epoch seconds) of next allowed call
- * failure_backoff = next interval to use on failure, in seconds
+ * ngx_http_akita_agent_retry_time = time (epoch seconds) of next allowed call
+ * ngx_http_akita_agent_max_backoff = next interval to use on failure, in seconds
  *
  * TODO: this doesn't distinguish multiple agents; either figure out 
  * a better way (using the server config?) or make a keyed data structure.
+ * TODO: it would be less disruptive to let a single or few calls through as a
+ * probe of liveness rather than blocking *every* call after the timer.
  */
 static time_t ngx_http_akita_agent_retry_time;
 static ngx_uint_t ngx_http_akita_agent_backoff;
@@ -569,16 +571,17 @@ static void
 ngx_http_akita_agent_failed(ngx_log_t *log) {
   /* Another request could have already failed and increased the time;
    * make sure we are not already disabled.*/
-  if (ngx_http_akita_agent_allowed()) {
-    ngx_log_error(NGX_LOG_ERR, log, 0,
-                  "Mirroring to Akita blocked for %d seconds",
-                  ngx_http_akita_agent_backoff);
-    
-    ngx_http_akita_agent_retry_time = ngx_time() + ngx_http_akita_agent_backoff;
-    
-    if (ngx_http_akita_agent_backoff < ngx_http_akita_agent_max_backoff) {
-      ngx_http_akita_agent_backoff *= 2;
-    }
+  if (!ngx_http_akita_agent_allowed()) {
+    return;
+  }
+  ngx_log_error(NGX_LOG_WARN, log, 0,
+                "Mirroring to Akita blocked for %d seconds",
+                ngx_http_akita_agent_backoff);
+  
+  ngx_http_akita_agent_retry_time = ngx_time() + ngx_http_akita_agent_backoff;
+  
+  if (ngx_http_akita_agent_backoff < ngx_http_akita_agent_max_backoff) {
+    ngx_http_akita_agent_backoff *= 2;
   }
 }
 
