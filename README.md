@@ -12,6 +12,11 @@ Check out Nginx source and this repo.  In the Nginx directory, run
 make
 ```
 
+To build with debug mode, SSL support, and AddressSantizer, use:
+
+```
+./configure --add-dynamic-module=/path/to/akita --with-http_ssl_module --with-debug --with-cc-opt=-fsanitize=address --with-ld-opt=-fsanitize=address
+```
 
 ## Example configuration
 
