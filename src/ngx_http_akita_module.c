@@ -541,6 +541,7 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
 static time_t ngx_http_akita_agent_retry_time;
 static ngx_uint_t ngx_http_akita_agent_backoff;
 
+/* Minimum and maximum backoff period, in seconds */
 static const int ngx_http_akita_agent_initial_backoff = 30;
 static const int ngx_http_akita_agent_max_backoff = 240;
 
