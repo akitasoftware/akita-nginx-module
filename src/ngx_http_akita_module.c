@@ -531,7 +531,7 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
  * agent.  If so, we'll suspend further communication until later.
  * 
  * ngx_http_akita_agent_retry_time = time (epoch seconds) of next allowed call
- * ngx_http_akita_agent_max_backoff = next interval to use on failure, in seconds
+ * ngx_http_akita_agent_backoff = next interval to use on failure, in seconds
  *
  * TODO: this doesn't distinguish multiple agents; either figure out 
  * a better way (using the server config?) or make a keyed data structure.
