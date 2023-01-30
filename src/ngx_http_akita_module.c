@@ -671,19 +671,22 @@ ngx_http_akita_agent_process_headers(ngx_http_request_t *r) {
       /* Handle content-length but ignore other headers. Copy the header data into 
          a fresh buffer instead of just referencing it in-place.
          The code here is adapted from ngx_http_proxy_module's upstream handling  */
-      if (ngx_strncasecmp( (unsigned char*)"content-length",
+      u_char *content_length_lc = (u_char *)"content-length";
+      if (ngx_strncasecmp( content_length_lc,
                            r->header_name_start,
                            r->header_name_end - r->header_name_start ) == 0 ) {
         h = ngx_list_push(&r->upstream->headers_in.headers);
         if (h == NULL) {
           return NGX_ERROR;
         }
+        h->hash = 0;
         h->key.len = r->header_name_end - r->header_name_start;
         h->value.len = r->header_end - r->header_start; /* header_start = start of value, not start of entire thing */        
         h->key.data = ngx_pcalloc(r->pool, h->key.len + h->value.len + 2); /* Include null termination? */
         h->value.data = h->key.data + h->key.len + 1;
         ngx_memcpy(h->key.data, r->header_name_start, h->key.len);
         ngx_memcpy(h->value.data, r->header_start, h->value.len);
+        h->lowcase_key = content_length_lc;
 
         r->upstream->headers_in.content_length = h;
         content_length_parsed = ngx_atoof(h->value.data, h->value.len);

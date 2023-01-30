@@ -179,7 +179,7 @@ static void json_write_uint_property(json_data_t *j, ngx_str_t *key, ngx_uint_t 
 static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
   ngx_uint_t need_comma = 0;
   
-  while (kv->key.len > 0) {
+  for (; kv->key.len > 0; kv++) {
     if (kv->omit) {
       continue;
     }
@@ -192,7 +192,6 @@ static void json_write_kv_strings(json_data_t *j, json_kv_string_t *kv) {
     json_write_char(j, ':');
     json_write_string_literal(j, &(kv->value));
     need_comma = 1;
-    kv++;
   }
 }
 
