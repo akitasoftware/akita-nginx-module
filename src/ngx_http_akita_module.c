@@ -20,6 +20,10 @@ static ngx_int_t ngx_http_akita_agent_process_status_line(ngx_http_request_t *r)
 static ngx_int_t ngx_http_akita_agent_process_headers(ngx_http_request_t *r);
 static void ngx_http_akita_agent_abort_request(ngx_http_request_t *r);
 static void ngx_http_akita_agent_finalize_request(ngx_http_request_t *r, ngx_int_t rc);
+static ngx_int_t ngx_http_akita_init_backoff(ngx_cycle_t *cycle);
+static ngx_flag_t ngx_http_akita_agent_allowed(void);
+static void ngx_http_akita_agent_succeeded(void);
+static void ngx_http_akita_agent_failed(ngx_log_t *);
 
 
 static const ngx_uint_t default_max_body = 1 * 1024 * 1024;
@@ -71,10 +75,9 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   conf->upstream.force_ranges = 0;
   conf->upstream.local = NULL;
   conf->upstream.socket_keepalive = 0;
-  /* TODO: these seem kind of long, reduce? */
-  conf->upstream.connect_timeout = 60000;  /* Connection timeout in ms */
-  conf->upstream.send_timeout = 60000;
-  conf->upstream.read_timeout = 60000;
+  conf->upstream.connect_timeout = 2000;  /* Connection timeout in ms */
+  conf->upstream.send_timeout = 2000;     /* Write timeout in ms */
+  conf->upstream.read_timeout = 2000;     /* Read timeout in ms */
   conf->upstream.next_upstream_timeout = 0;
   conf->upstream.send_lowat = 0;
   conf->upstream.buffer_size = (size_t)ngx_pagesize;
@@ -111,10 +114,10 @@ ngx_http_akita_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 
   if (conf->upstream.upstream == NULL) {
     if (prev->upstream.upstream != NULL) {
-      /* Copy the pointer to the upstream that was registered earlier! */
+      /* Copy the pointer to the server that was registered earlier! */
       conf->upstream.upstream = prev->upstream.upstream;
     } else if (conf->enabled) {
-      /* Create a new upstream using the configured address. */
+      /* Create a new upstream server using the configured address. */
       return ngx_http_akita_create_upstream(cf, conf, conf->agent_address);
     }
   }
@@ -143,10 +146,14 @@ ngx_http_akita_create_upstream(ngx_conf_t *cf,
 
   /* Create an upstream for the agent.  The rest of the configuration is filled in
      separately, in ngx_http_akita_merge_loc_conf. */
-  akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u, 0);
+  akita_conf->upstream.upstream = ngx_http_upstream_add(cf, &u,
+                                                        NGX_HTTP_UPSTREAM_MAX_FAILS|
+                                                        NGX_HTTP_UPSTREAM_FAIL_TIMEOUT);
   if (akita_conf->upstream.upstream == NULL) {
     return NGX_CONF_ERROR;
   }
+  /* TODO: I tried configuring the server's max_fails and fail_timeout, but
+   * the server array is null at this point. Can we populate it? */
   
   return NGX_CONF_OK;
 }
@@ -258,7 +265,7 @@ ngx_module_t ngx_http_akita_module = {
   NGX_HTTP_MODULE,
   NULL, /* init master */
   NULL, /* init module */
-  NULL, /* init process */
+  ngx_http_akita_init_backoff, /* init process */
   NULL, /* init thread */
   NULL, /* exit thread */
   NULL, /* exit process */
@@ -312,10 +319,13 @@ ngx_http_akita_body_callback(ngx_http_request_t *r) {
   }
   
   /* Send the request metadata and body to Akita */
-  if (ngx_akita_send_request_body(r, ngx_http_akita_request_location, ctx, akita_config, callback) != NGX_OK) {
-    ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
-                   "Failed to send request body to Akita agent" );
-    /* Fall through and continue to send the real request! */
+  if (ngx_http_akita_agent_allowed()) {
+    if (ngx_akita_send_request_body(r, ngx_http_akita_request_location, ctx, akita_config, callback) != NGX_OK) {
+      ngx_log_error( NGX_LOG_ERR, r->connection->log, 0,
+                     "Failed to send request body to Akita agent" );
+      ngx_http_akita_agent_failed(r->connection->log);
+      /* Fall through and continue to send the real request! */
+    }
   }
 
   /* Record that we should respond with DECLINED the next time
@@ -398,11 +408,13 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
 /* Logs the return and status codes from upstream calls to the Akita agent. */ 
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
-  /* TODO: when it's an error, disable and set a timer (with backoff) to re-enable. */
-
   ngx_uint_t severity = NGX_LOG_DEBUG;
   if (r->headers_out.status != 200 || rc != NGX_OK ) {
+    /* When it's an unexpected response, warn and temporarily disable further requests */ 
+    ngx_http_akita_agent_failed(r->connection->log);
     severity = NGX_LOG_WARN;
+  } else {
+    ngx_http_akita_agent_succeeded();
   }
   ngx_log_error( severity, r->connection->log, 0,
                  "Return code %d from subrequest, HTTP status code %d",
@@ -497,13 +509,16 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
       }
       callback->handler = ngx_http_akita_subrequest_callback;
       callback->data = NULL;
-      if (ngx_akita_finish_response_body(r, ngx_http_akita_response_location,
-                                         ctx,
-                                         akita_config,
-                                         callback) != NGX_OK) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "Failed to mirror response to Akita agent");
-        ctx->enabled = 0;
+      if (ngx_http_akita_agent_allowed()) {
+        if (ngx_akita_finish_response_body(r, ngx_http_akita_response_location,
+                                           ctx,
+                                           akita_config,
+                                           callback) != NGX_OK) {
+          ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                        "Failed to mirror response to Akita agent");
+          ngx_http_akita_agent_failed(r->connection->log);
+          ctx->enabled = 0;
+        }
       }
       break;      
     }   
@@ -512,6 +527,64 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
   return ngx_http_next_body_filter(r, chain);
 }
 
+/* Per-process state: records if we've had a failure communicating with the
+ * agent.  If so, we'll suspend further communication until later.
+ * 
+ * ngx_http_akita_agent_retry_time = time (epoch seconds) of next allowed call
+ * ngx_http_akita_agent_backoff = next interval to use on failure, in seconds
+ *
+ * TODO: this doesn't distinguish multiple agents; either figure out 
+ * a better way (using the server config?) or make a keyed data structure.
+ * TODO: it would be less disruptive to let a single or few calls through as a
+ * probe of liveness rather than blocking *every* call after the timer.
+ */
+static time_t ngx_http_akita_agent_retry_time;
+static ngx_uint_t ngx_http_akita_agent_backoff;
+
+/* Minimum and maximum backoff period, in seconds */
+static const int ngx_http_akita_agent_initial_backoff = 30;
+static const int ngx_http_akita_agent_max_backoff = 240;
+
+/* Initialize the per-process backoff state */
+static ngx_int_t
+ngx_http_akita_init_backoff(ngx_cycle_t *cycle) {
+  ngx_http_akita_agent_retry_time = ngx_time();
+  ngx_http_akita_agent_backoff = ngx_http_akita_agent_initial_backoff;
+  return NGX_OK;
+}
+
+/* Return true if a request can currently be sent */
+static ngx_flag_t
+ngx_http_akita_agent_allowed() {
+  return ngx_time() >= ngx_http_akita_agent_retry_time;
+}
+
+/* Handle a successful request by resetting the backoff time
+ * to its initial (minimum) value. */
+static void
+ngx_http_akita_agent_succeeded() {
+  ngx_http_akita_agent_backoff = ngx_http_akita_agent_initial_backoff;
+}
+
+/* Handle an unsuccessful request by setting the retry time
+ * and doubling the backoff for the next failure */
+static void
+ngx_http_akita_agent_failed(ngx_log_t *log) {
+  /* Another request could have already failed and increased the time;
+   * make sure we are not already disabled.*/
+  if (!ngx_http_akita_agent_allowed()) {
+    return;
+  }
+  ngx_log_error(NGX_LOG_WARN, log, 0,
+                "Mirroring to Akita blocked for %d seconds",
+                ngx_http_akita_agent_backoff);
+  
+  ngx_http_akita_agent_retry_time = ngx_time() + ngx_http_akita_agent_backoff;
+  
+  if (ngx_http_akita_agent_backoff < ngx_http_akita_agent_max_backoff) {
+    ngx_http_akita_agent_backoff *= 2;
+  }
+}
 
 /*
  * Send a subrequest (that's arrived at our content handler) to the specified upstream
