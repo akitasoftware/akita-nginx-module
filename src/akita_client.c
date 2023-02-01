@@ -511,6 +511,7 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
     { ngx_string( "method" ), r->method_name, 0 },  /* 1 */
     { ngx_string( "path" ), r->uri, 0 },            /* 2 */
     { ngx_string( "host" ), ngx_null_string, 1 },   /* 3 */
+    { ngx_string( "nginx_internal" ), ngx_string( "true" ), 1 }, /* 4 */
     { ngx_null_string, ngx_null_string, 0 },
   };
   
@@ -520,6 +521,15 @@ ngx_akita_send_request_body(ngx_http_request_t *r, ngx_str_t agent_path,
     string_fields[3].omit = 0;
   }
 
+  /* Mark internal requests to help disambiguate. An internal redirect will 
+   * clear the request's context so we'll see the request twice.
+   * (Re-adding the context but skipping this packet would work sometimes,
+   * but not always.)
+   */
+  if (r->internal) {
+    string_fields[4].omit = 0;
+  }
+  
   json_write_char( j, '{' );
   json_write_kv_strings( j, string_fields );
   json_write_char( j, ',' );
