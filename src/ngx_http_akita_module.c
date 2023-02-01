@@ -510,7 +510,7 @@ ngx_http_akita_response_complete(ngx_http_request_t *r,
 
   ngx_gettimeofday(&ctx->response_complete);
 
-  /* Don't pay attent to any further calls to the body filter, just in case. */
+  /* Don't pay attention to any further calls to the body filter, just in case. */
   ctx->enabled = 0;
 
   if (!ngx_http_akita_agent_allowed()) {
