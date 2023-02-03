@@ -428,18 +428,16 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
   ngx_uint_t severity = NGX_LOG_DEBUG;
-  /* Expect either "499" response code (internal to Nginx) or
-   * status 200 from server and response code NGX_OK from Nginx.
-   * Otherwise warn and temporarily disable further requests. */ 
-  if (rc != NGX_HTTP_CLIENT_CLOSED_REQUEST &&
-      (r->headers_out.status != 200 || rc != NGX_OK)) {
+  /* Expect status 200 from server and response code NGX_OK from Nginx.
+   * Otherwise warn and temporarily disable further requests.
+   */
+  if (rc == NGX_HTTP_CLIENT_CLOSED_REQUEST) {
+    /* Do not treat "499" as either success or failure. */
+  } else if (r->headers_out.status == 200 && rc == NGX_OK) {
+    ngx_http_akita_agent_succeeded();
+  } else {
     ngx_http_akita_agent_failed(r->connection->log);
     severity = NGX_LOG_WARN;
-  } else {
-    /* But, do not treat a 499 as a success. */
-    if (rc != NGX_HTTP_CLIENT_CLOSED_REQUEST) {
-      ngx_http_akita_agent_succeeded();
-    }
   }
   ngx_log_error( severity, r->connection->log, 0,
                  "Return code %d from subrequest, HTTP status code %d",
