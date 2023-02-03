@@ -380,6 +380,16 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
     return NGX_DECLINED;
   }
 
+  /*
+   * Do not handle HEAD requests; they lead to bad behavior.
+   * My theory is that subrequests are not given a chance to finish before
+   * the main request responds with its headers and is finalized. This 
+   * leads to both 499's and alerts stating "http finalize non-active request"
+   */
+  if (r->method == NGX_HTTP_HEAD) {
+    return NGX_DECLINED;
+  }
+  
   akita_config = ngx_http_get_module_loc_conf(r, ngx_http_akita_module);
   if ( akita_config == NULL || !akita_config->enabled ) {    
     /* Not enabled for this location. */
