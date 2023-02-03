@@ -12,6 +12,8 @@ static char * ngx_http_akita_create_upstream(ngx_conf_t *cf, ngx_http_akita_loc_
 static ngx_int_t ngx_http_akita_precontent_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_header_filter(ngx_http_request_t *r);
 static ngx_int_t ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain);
+static void ngx_http_akita_response_complete(ngx_http_request_t *t, ngx_http_akita_ctx_t *ctx,
+                                             ngx_http_akita_loc_conf_t *akita_config);
 static ngx_int_t ngx_http_akita_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_akita_send_request_to_upstream(ngx_http_request_t *subreq, ngx_http_upstream_conf_t *upstream);
 static ngx_int_t ngx_http_akita_agent_create_request(ngx_http_request_t *r);
@@ -426,12 +428,16 @@ ngx_http_akita_precontent_handler(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_akita_subrequest_callback(ngx_http_request_t *r, void * data, ngx_int_t rc ) {
   ngx_uint_t severity = NGX_LOG_DEBUG;
-  if (r->headers_out.status != 200 || rc != NGX_OK ) {
-    /* When it's an unexpected response, warn and temporarily disable further requests */ 
+  /* Expect status 200 from server and response code NGX_OK from Nginx.
+   * Otherwise warn and temporarily disable further requests.
+   */
+  if (rc == NGX_HTTP_CLIENT_CLOSED_REQUEST) {
+    /* Do not treat "499" as either success or failure. */
+  } else if (r->headers_out.status == 200 && rc == NGX_OK) {
+    ngx_http_akita_agent_succeeded();
+  } else {
     ngx_http_akita_agent_failed(r->connection->log);
     severity = NGX_LOG_WARN;
-  } else {
-    ngx_http_akita_agent_succeeded();
   }
   ngx_log_error( severity, r->connection->log, 0,
                  "Return code %d from subrequest, HTTP status code %d",
@@ -474,8 +480,60 @@ ngx_http_akita_response_header_filter(ngx_http_request_t *r) {
                    "Failed to mirror response to Akita agent." );
     ctx->enabled = 0;
   }
+
+  /* A normal HTTP request will go through the body filter even if the 
+   * response is empty. But, a HEAD request does not do so; we need to
+   * check it here.
+   *
+   * The header_only flag does not seem to be consistently used.
+   *
+   * TODO: unfortunately, on HEAD requests it appears that the connection
+   * gets shut down (by nginx, although it blames the client?) and as
+   * a result the response does not get time to send. Its subrequest
+   * is cancelled when the main request is finalized.
+   */
+  if (r->header_only || r->method == NGX_HTTP_HEAD) {
+    ngx_http_akita_response_complete(r, ctx, akita_config);
+  }
   
   return ngx_http_next_header_filter(r);
+}
+
+/* Finish the response payload and make the API call to the agent. */
+static void
+ngx_http_akita_response_complete(ngx_http_request_t *r,
+                                 ngx_http_akita_ctx_t *ctx,
+                                 ngx_http_akita_loc_conf_t *akita_config) {
+  ngx_http_post_subrequest_t *callback;
+
+  ngx_gettimeofday(&ctx->response_complete);
+
+  /* Don't pay attention to any further calls to the body filter, just in case. */
+  ctx->enabled = 0;
+
+  if (!ngx_http_akita_agent_allowed()) {
+    return;
+  }
+  
+  /* Allocate a callback struct to get the status code */
+  callback = ngx_pcalloc(r->pool, sizeof(ngx_http_post_subrequest_t));
+  if (callback == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "Failed to allocate callback");
+    return;
+  }
+  callback->handler = ngx_http_akita_subrequest_callback;
+  callback->data = NULL;
+
+  /* Create a subrequest containing the response. */
+  if (ngx_akita_finish_response_body(r, ngx_http_akita_response_location,
+                                     ctx,
+                                     akita_config,
+                                     callback) != NGX_OK) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "Failed to mirror response to Akita agent");
+    ngx_http_akita_agent_failed(r->connection->log);
+  }
 }
 
 /* Handles each portion of the HTTP response, adding it to the in-flight
@@ -486,7 +544,6 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
   ngx_http_akita_loc_conf_t *akita_config;
   ngx_http_akita_ctx_t *ctx;
   ngx_chain_t *curr;
-  ngx_http_post_subrequest_t *callback;
   
   if ( r != r->main ) {
     return ngx_http_next_body_filter(r, chain);
@@ -514,29 +571,7 @@ ngx_http_akita_response_body_filter(ngx_http_request_t *r, ngx_chain_t *chain) {
     }
         
     if (curr->buf->last_buf) {
-      ngx_gettimeofday(&ctx->response_complete);
-
-      /* Allocate a callback struct to get the status code */
-      callback = ngx_pcalloc(r->pool, sizeof(ngx_http_post_subrequest_t));
-      if (callback == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "Failed to allocate callback");
-        ctx->enabled = 0;
-        break;
-      }
-      callback->handler = ngx_http_akita_subrequest_callback;
-      callback->data = NULL;
-      if (ngx_http_akita_agent_allowed()) {
-        if (ngx_akita_finish_response_body(r, ngx_http_akita_response_location,
-                                           ctx,
-                                           akita_config,
-                                           callback) != NGX_OK) {
-          ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "Failed to mirror response to Akita agent");
-          ngx_http_akita_agent_failed(r->connection->log);
-          ctx->enabled = 0;
-        }
-      }
+      ngx_http_akita_response_complete(r, ctx, akita_config);
       break;      
     }   
   }
