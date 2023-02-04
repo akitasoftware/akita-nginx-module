@@ -92,13 +92,13 @@ workflows:
      jobs:
       - build-module:
           name:
-            Build against Nginx <<matrix.version>>
+            build-v<<matrix.version>>
           matrix:
             parameters:
               version: ["1.23.3","1.22.1"]   
       - build-module:
           name:
-            Release build against Nginx <<matrix.version>>
+            build-v<<matrix.version>>
           filters:
             branches:
               only:
@@ -109,12 +109,16 @@ workflows:
       - test-module:
           name:
             Nginx integration test using <<matrix.version>>
+          requires:
+            - build-v<<matrix.version>>
           matrix:
             parameters:
               version: ["1.23.3"] 
       - test-module:
           name:
             Nginx integration test using <<matrix.version>>
+          requires:
+            - build-v<<matrix.version>>
           filters:
             branches:
               only:
