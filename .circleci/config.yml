@@ -109,10 +109,6 @@ workflows:
       - test-module:
           name:
             Nginx integration test using <<matrix.version>>
-          filters:
-            branches:
-              only:
-                - release
           matrix:
             parameters:
               version: ["1.23.3"] 
