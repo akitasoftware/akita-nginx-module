@@ -71,13 +71,17 @@ jobs:
           name: "Unpack integration tests"
           command: "tar xzvf tip.tar.gz"
       - run:
+          # The tests file has an unpredictable directory name, create an alias to it
+          name: "Create test directory alias"
+          command: "ln -s nginx-tests-tip `ls -1 | grep nginx-tests`"
+      - run:
           name: "Execute tests"
           command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
           environment:
             TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
             TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
-          working_directory: "nginx-tests-84b6bb8d74e5"
+          working_directory: "nginx-tests-tip"
       - store_artifacts:
           path: /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so 
           destination: "akita-module-<<parameters.version>>"
