@@ -61,6 +61,9 @@ jobs:
         default: "1.23.3"
         type: string
     steps:
+      - run:
+          name: "Set up workspace"
+          command: "mkdir /workspace"
       - attach_workspace:
           at: /workspace
       # TODO: make this deterministic? Or somehow extract the UUID from the tarfile?
