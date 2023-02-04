@@ -61,11 +61,8 @@ jobs:
         default: "1.23.3"
         type: string
     steps:
-      - run:
-          name: "Set up workspace"
-          command: "mkdir /workspace"
       - attach_workspace:
-          at: /workspace
+          at: /tmp/workspace
       # TODO: make this deterministic? Or somehow extract the UUID from the tarfile?
       - run:
           name: "Download integration tests"
@@ -77,12 +74,12 @@ jobs:
           name: "Execute tests"
           command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
           environment:
-            TEST_NGINX_BINARY: "/workspace/<<parameters.version>>/nginx"
-            TEST_NGINX_GLOBALS: "load_module /workspace/<<parameters.version>>/ngx_http_akita_module.so;"
+            TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
+            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
           working_directory: "nginx-tests-9a44d489966c"
       - store_artifacts:
-          path: /workspace/ngx_http_akita_module.so 
+          path: /tmp/workspace/ngx_http_akita_module.so 
           destination: "akita-module-<<parameters.version>>"
       - store_artifacts:
           path: nginx-plus-module-prove-test-verbose
