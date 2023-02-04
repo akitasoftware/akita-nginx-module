@@ -46,13 +46,13 @@ jobs:
           name: "Copy nginx"
           command: "cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/"
       - run:
-          name: "Copy nmodule"
+          name: "Copy module"
           command: "cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/"
       - persist_to_workspace:
           root: workspace
           paths:
-            - "workspace/<<parameters.version>>/nginx"
-            - "workspace/<<parameters.version>>/ngx_http_akita_module.so"
+            - "<<parameters.version>>/nginx"
+            - "<<parameters.version>>/ngx_http_akita_module.so"
   test-module:
     docker:
       - image: cimg/base:stable
