@@ -78,7 +78,7 @@ jobs:
       - run:
           # The tests file has an unpredictable directory name, create an alias to it
           name: "Create test directory alias"
-          command: "ln -s nginx-tests-tip `ls -1 | grep nginx-tests`"
+          command: "ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip"
       - run:
           name: "Execute tests"
           command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
