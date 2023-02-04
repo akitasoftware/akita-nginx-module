@@ -2,7 +2,6 @@
 
 Nginx module for mirroring request and response data to the Akita agent.
 
-
 ## Build instructions
 
 Check out Nginx source and this repo.  In the Nginx directory, run
@@ -39,13 +38,13 @@ http {
         proxy_pass http://127.0.0.1:8000/;
         akita_enable on;
      }
- 
-     # This is a placeholder that will be replaced by a proper upstream.
-     location /akita {
-        proxy_pass http://localhost:5555/;
-        proxy_http_version 1.1;
-        proxy_set_header   "Connection" "";
-     }
   }
 }
 ```
+
+## Limitations / Known Issues
+
+* The Akita module cannot track HEAD requests.
+
+* Some of the Nginx integration tests related to If-Modified and If-Match fail when the Akita module is enabled.
+
