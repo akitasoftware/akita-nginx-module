@@ -33,7 +33,7 @@ jobs:
           command: "tar -xzf nginx-<<parameters.version>>.tar.gz"
       - run:
           name: "Configure nginx"
-          command: "./configure --add-module=../akita"
+          command: "./configure --add-dynamic-module=../akita --with-http_ssl_module"
           working_directory: "nginx-<<parameters.version>>"
       - run:
           name: "Compile <<parameters.version>>"
