@@ -77,9 +77,9 @@ jobs:
             TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
             TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
-          working_directory: "nginx-tests-9a44d489966c"
+          working_directory: "nginx-tests-84b6bb8d74e5"
       - store_artifacts:
-          path: /tmp/workspace/ngx_http_akita_module.so 
+          path: /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so 
           destination: "akita-module-<<parameters.version>>"
       - store_artifacts:
           path: nginx-plus-module-prove-test-verbose
