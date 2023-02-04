@@ -346,11 +346,17 @@ json_escape_buf(json_data_t *j, ngx_http_request_t *r, size_t max_size, size_t *
       return NGX_ERROR;
     }
     unescaped = file_buf;
-  } else if (buf->last_buf) {
-    /* Empty buf allowed at the end of a chain */
+  } else if (buf->last_buf || buf->flush) {
+    /* Empty buf allowed at the end of a chain, or if it's signalling a flush. */
     return NGX_OK;
   } else {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state");
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unexpected buffer state: memory=%d in_file=%d flush=%d sync=%d last_buf=%d last_in_chain=%d",
+                  buf->memory,
+                  buf->in_file,
+                  buf->flush,
+                  buf->sync,
+                  buf->last_buf,
+                  buf->last_in_chain);
     return NGX_ERROR;
   }
 
