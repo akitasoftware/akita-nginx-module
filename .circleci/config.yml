@@ -65,7 +65,7 @@ jobs:
           name: "Install nginx dependencies"
           command: |
             sudo apt-get update -y
-            sudo apt-get install -y libapparmor-perl libcache-memcached-fast-perl libcache-memcached-perl libcgi-compress-gzip-perl libcgi-fast-perl libcgi-pm-perl libencode-locale-perl liberror-perl libfcgi-perl libhtml-parser-perl libhtml-tagset-perl libhttp-date-perl libhttp-message-perl libio-html-perl libio-socket-ip-perl libio-socket-ssl-perl liblocale-gettext-perl liblwp-mediatypes-perl libnet-libidn-perl libnet-ssleay-perl libpcre3 libpcre3-dev libperl5.22 libstring-crc32-perl libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl libtimedate-perl liburi-perl zlib1g zlib1g-dev
+            sudo apt-get install -y libapparmor-perl libcache-memcached-fast-perl libcache-memcached-perl libcgi-compress-gzip-perl libcgi-fast-perl libcgi-pm-perl libencode-locale-perl liberror-perl libfcgi-perl libhtml-parser-perl libhtml-tagset-perl libhttp-date-perl libhttp-message-perl libio-html-perl libio-socket-ip-perl libio-socket-ssl-perl liblocale-gettext-perl liblwp-mediatypes-perl libnet-libidn-perl libnet-ssleay-perl libpcre3 libpcre3-dev libstring-crc32-perl libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl libtimedate-perl liburi-perl zlib1g zlib1g-dev
       - attach_workspace:
           at: /tmp/workspace
       # TODO: make this deterministic? Or somehow extract the UUID from the tarfile?
