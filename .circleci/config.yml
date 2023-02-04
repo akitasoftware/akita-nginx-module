@@ -39,15 +39,74 @@ jobs:
           name: "Compile <<parameters.version>>"
           command: "make"
           working_directory: "nginx-<<parameters.version>>"
+      - run:
+          name: "Set up workspace"
+          command: "mkdir workspace"
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "nginx-<<parameters.version>>/objs/nginx"
+            - "nginx-<<parameters.version>>/objs/ngx_http_akita_module.so"
+  test-module:
+    docker:
+      - image: cimg/base:stable
+    parameters:
+      version:
+        default: "1.23.3"
+        type: string
+    steps:
+      - attach_workspace:
+          at: /workspace
+      # TODO: make this deterministic? Or somehow extract the UUID from the tarfile?
+      - run:
+          name: "Download integration tests"
+          command: "wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz"
+      - run:
+          name: "Unpack integration tests"
+          command: "tar xzvf tip.tar.gz"
+      - run:
+          name: "Execute tests"
+          command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
+          environment:
+            TEST_NGINX_BINARY: "/workspace/nginx"
+            TEST_NGINX_GLOBALS: "load_module /workspace/ngx_http_akita_module.so;"
+            TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
+          working_directory: "nginx-tests-9a44d489966c"
+      - store_artifacts:
+          path: /workspace/ngx_http_akita_module.so 
+          destination: "akita-module-<<parameters.version>>"
+      - store_artifacts:
+          path: nginx-plus-module-prove-test-verbose
+          destination: "nginx-test-results-<<parameters.version>>"
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-  akita-module:
-    jobs:
+  release-akita-module:
+     jobs:
       - build-module:
           name:
             Build against Nginx <<matrix.version>>
           matrix:
             parameters:
-              version: ["1.23.3","1.22.1"]
+              version: ["1.23.3","1.22.1"]   
+      - build-module:
+          name:
+            Release build against Nginx <<matrix.version>>
+          filters:
+            branches:
+              only:
+                - release
+          matrix:
+            parameters:
+              version: ["1.21.6"]
+      - test-module:
+          name:
+            Nginx integration test using <<matrix.version>>
+          filters:
+            branches:
+              only:
+                - release
+          matrix:
+            parameters:
+              version: ["1.23.3", "1.22.1", "1.21.6"] 
