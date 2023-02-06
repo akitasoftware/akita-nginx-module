@@ -51,8 +51,8 @@ jobs:
             - "<<parameters.version>>/nginx"
             - "<<parameters.version>>/ngx_http_akita_module.so"
   test-module:
-    docker:
-      - image: cimg/base:stable
+    machine:
+      image: ubuntu-2204
     parameters:
       version:
         default: "1.23.3"
