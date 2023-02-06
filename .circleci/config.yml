@@ -52,7 +52,8 @@ jobs:
             - "<<parameters.version>>/ngx_http_akita_module.so"
   test-module:
     machine:
-      image: ubuntu-2204
+      image: ubuntu-2204:2022.10.2
+    resource_class: medium
     parameters:
       version:
         default: "1.23.3"
