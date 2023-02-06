@@ -40,14 +40,11 @@ jobs:
           command: "make"
           working_directory: "nginx-<<parameters.version>>"
       - run:
-          name: "Set up workspace"
-          command: "mkdir -p workspace/<<parameters.version>>"
-      - run:
-          name: "Copy nginx"
-          command: "cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/"
-      - run:
-          name: "Copy module"
-          command: "cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/"
+          name: "Copy binaries to workspace"
+          command: |
+            "mkdir -p workspace/<<parameters.version>>"
+            "cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/"
+            "cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/"
       - persist_to_workspace:
           root: workspace
           paths:
@@ -68,17 +65,13 @@ jobs:
             sudo apt-get install -y libapparmor-perl libcache-memcached-fast-perl libcache-memcached-perl libcgi-compress-gzip-perl libcgi-fast-perl libcgi-pm-perl libencode-locale-perl liberror-perl libfcgi-perl libhtml-parser-perl libhtml-tagset-perl libhttp-date-perl libhttp-message-perl libio-html-perl libio-socket-ip-perl libio-socket-ssl-perl liblocale-gettext-perl liblwp-mediatypes-perl libnet-libidn-perl libnet-ssleay-perl libpcre3 libpcre3-dev libstring-crc32-perl libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl libtimedate-perl liburi-perl zlib1g zlib1g-dev
       - attach_workspace:
           at: /tmp/workspace
-      # TODO: make this deterministic? Or somehow extract the UUID from the tarfile?
       - run:
           name: "Download integration tests"
-          command: "wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz"
-      - run:
-          name: "Unpack integration tests"
-          command: "tar xzvf tip.tar.gz"
-      - run:
-          # The tests file has an unpredictable directory name, create an alias to it
-          name: "Create test directory alias"
-          command: "ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip"
+          # The directory has an unpredicatable name, create an alias for it
+          command: |
+            "wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz"
+            "tar xzvf tip.tar.gz"
+            "ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip"
       - run:
           name: "Execute tests"
           command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
