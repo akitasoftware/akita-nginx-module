@@ -42,9 +42,9 @@ jobs:
       - run:
           name: "Copy binaries to workspace"
           command: |
-            "mkdir -p workspace/<<parameters.version>>"
-            "cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/"
-            "cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/"
+            mkdir -p workspace/<<parameters.version>>
+            cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/
+            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/
       - persist_to_workspace:
           root: workspace
           paths:
@@ -69,9 +69,9 @@ jobs:
           name: "Download integration tests"
           # The directory has an unpredicatable name, create an alias for it
           command: |
-            "wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz"
-            "tar xzvf tip.tar.gz"
-            "ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip"
+            wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz
+            tar xzvf tip.tar.gz
+            ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip
       - run:
           name: "Execute tests"
           command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
