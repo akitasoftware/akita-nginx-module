@@ -57,6 +57,6 @@ typedef struct {
 } ngx_http_akita_ctx_t;
 
 /* The module structure is necessary to access per-module config or context */
-ngx_module_t ngx_http_akita_module;
+extern ngx_module_t ngx_http_akita_module;
 
 #endif /* _NGX_HTTP_AKITA_MODULE_H_INCLUDED */

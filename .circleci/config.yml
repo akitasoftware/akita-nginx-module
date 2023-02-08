@@ -8,8 +8,9 @@ jobs:
   build-module:
     # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
     # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
-    docker:
-      - image: cimg/base:stable
+    machine:
+      image: ubuntu-2204:2022.10.2
+    resource_class: medium
     parameters:
       version:
         default: "1.23.3"
@@ -24,7 +25,7 @@ jobs:
           name: "Install nginx dependencies"
           command: |
             sudo apt-get update -y
-            sudo apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
       - run:
           name: "Download nginx <<parameters.version>>"
           command: "wget http://nginx.org/download/nginx-<<parameters.version>>.tar.gz"          
@@ -33,21 +34,91 @@ jobs:
           command: "tar -xzf nginx-<<parameters.version>>.tar.gz"
       - run:
           name: "Configure nginx"
-          command: "./configure --add-module=../akita"
+          command: "./configure --add-dynamic-module=../akita --with-http_ssl_module"
           working_directory: "nginx-<<parameters.version>>"
       - run:
           name: "Compile <<parameters.version>>"
           command: "make"
           working_directory: "nginx-<<parameters.version>>"
+      - run:
+          name: "Copy binaries to workspace"
+          command: |
+            mkdir -p workspace/<<parameters.version>>
+            cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/
+            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - "<<parameters.version>>/nginx"
+            - "<<parameters.version>>/ngx_http_akita_module.so"
+  test-module:
+    machine:
+      image: ubuntu-2204:2022.10.2
+    resource_class: medium
+    parameters:
+      version:
+        default: "1.23.3"
+        type: string
+    steps:
+      - run:
+          name: "Install nginx dependencies"
+          command: |
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libapparmor1 libcache-memcached-fast-perl libcache-memcached-perl libcgi-compress-gzip-perl libcgi-fast-perl libcgi-pm-perl libencode-locale-perl liberror-perl libfcgi-perl libhtml-parser-perl libhtml-tagset-perl libhttp-date-perl libhttp-message-perl libio-html-perl libio-socket-ip-perl libio-socket-ssl-perl liblocale-gettext-perl liblwp-mediatypes-perl libnet-libidn-perl libnet-ssleay-perl libpcre3 libpcre3-dev libstring-crc32-perl libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl libtimedate-perl liburi-perl zlib1g zlib1g-dev
+      - attach_workspace:
+          at: /tmp/workspace
+      - run:
+          name: "Download integration tests"
+          # The directory has an unpredicatable name, create an alias for it
+          command: |
+            wget http://hg.nginx.org/nginx-tests/archive/tip.tar.gz
+            tar xzvf tip.tar.gz
+            ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip
+      - run:
+          name: "Execute tests with akita_enable off"
+          command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose || true"
+          environment:
+            TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
+            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
+            TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
+          working_directory: "nginx-tests-tip"
+      - store_artifacts:
+          path: /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so 
+          destination: "akita-module-<<parameters.version>>/ngx_http_akita_module.so"
+      - store_artifacts:
+          path: nginx-plus-module-prove-test-verbose
+          destination: "nginx-test-results-<<parameters.version>>/nginx-plus-module-prove-test-verbose"
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
-  akita-module:
-    jobs:
+  release-akita-module:
+     jobs:
       - build-module:
           name:
-            Build against Nginx <<matrix.version>>
+            build-v<<matrix.version>>
           matrix:
             parameters:
-              version: ["1.23.3","1.22.1"]
+              version: ["1.23.3"]   
+      - build-module:
+          name:
+            build-v<<matrix.version>>
+          filters:
+            branches:
+              only:
+                - release
+          matrix:
+            parameters:
+              version: ["1.22.0", "1.21.6", "1.18.0"]
+      - test-module:
+          name:
+            Nginx integration test using <<matrix.version>>
+          requires:
+            - build-v<<matrix.version>>
+          filters:
+            branches:
+              only:
+                - release
+          matrix:
+            parameters:
+              version: ["1.23.3", "1.22.0", "1.21.6", "1.18.0"] 
