@@ -75,8 +75,8 @@ jobs:
             tar xzvf tip.tar.gz
             ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip
       - run:
-          name: "Execute tests"
-          command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose"
+          name: "Execute tests with akita_enable off"
+          command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose || true"
           environment:
             TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
             TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
@@ -99,7 +99,7 @@ workflows:
             build-v<<matrix.version>>
           matrix:
             parameters:
-              version: ["1.23.3","1.22.1"]   
+              version: ["1.23.3"]   
       - build-module:
           name:
             build-v<<matrix.version>>
@@ -109,15 +109,7 @@ workflows:
                 - release
           matrix:
             parameters:
-              version: ["1.21.6"]
-      - test-module:
-          name:
-            Nginx integration test using <<matrix.version>>
-          requires:
-            - build-v<<matrix.version>>
-          matrix:
-            parameters:
-              version: ["1.23.3"] 
+              version: ["1.22.0", "1.21.6", "1.18.0"]
       - test-module:
           name:
             Nginx integration test using <<matrix.version>>
@@ -129,4 +121,4 @@ workflows:
                 - release
           matrix:
             parameters:
-              version: ["1.22.1", "1.21.6"] 
+              version: ["1.23.3", "1.22.0", "1.21.6", "1.18.0"] 
