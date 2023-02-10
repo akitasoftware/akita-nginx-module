@@ -25,9 +25,9 @@ bash -c "$(curl -L https://releases.akita.software/scripts/install_akita.sh)"
 NGINX running on your system, verify that it is supported, and
 download a precompiled dynamic module.  The module will be installed
 in `/etc/nginx/modules` by default.  Alternatively, you can download a
-precompiled module directly; see [Prebuiltmodules](#prebuilt-modules).  
+precompiled module directly; see [Prebuilt modules](#prebuilt-modules).  
 If no module is available for your plaform or your version of NGINX, 
-please [contact Akita](support@akitasoftware.com) or see 
+please [contact Akita](mailto:support@akitasoftware.com) or see 
 [Building the module from source](#building-the-module-from-source).
 
 6. Run `akita nginx collect --project {your project}` which will start
@@ -56,8 +56,7 @@ please [contact Akita](support@akitasoftware.com) or see
 
 9. Check whether the Akita agent indicates whether traffic is
    successfully being captured and uploaded to the Akita cloud.  If
-   not, please contact
-   [support@akitasoftware.com](mailto:support@akitasoftware.com) for
+   not, please [contact Akita](mailto:support@akitasoftware.com) for
    assistance, including any output from the Akita agent, your NGINX
    configuration, and your NGINX log file.
 
