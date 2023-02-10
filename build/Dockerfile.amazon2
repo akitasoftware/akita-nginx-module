@@ -1,0 +1,12 @@
+FROM amazonlinux:2
+
+RUN yum update -y
+
+# C compiler
+RUN yum groupinstall -y "Development Tools"
+
+# CircleCI dependencies
+# already handled by Development Tools
+
+# Nginx dependencies
+RUN yum install -y pcre-devel libxml2-devel uuid-devel zlib-devel wget
