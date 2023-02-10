@@ -7,18 +7,18 @@ version: 2.1
 executors:
   ubuntu2004:
     docker:
-      image: akitasoftware/nginx-build-ubuntu2004:latest
+      - image: akitasoftware/nginx-build-ubuntu2004:latest
     resource_class: medium
   ubuntu2204:
     docker:
-      image: akitasoftware/nginx-build-ubuntu2204:latest
+      - image: akitasoftware/nginx-build-ubuntu2204:latest
     resource_class: medium
   amazon2:
     docker:
-      image: akitasoftware/nginx-build-amazon2:latest
+      - image: akitasoftware/nginx-build-amazon2:latest
     resource_class: medium
-      
-# Define a job to be invoked later in a workflow.
+
+# Define a job to be invoked later in a workflow.      
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
   build-module:
@@ -27,9 +27,10 @@ jobs:
         default: "1.23.3"
         type: string
       platform:
-        default: ubuntu2004
-        type: executor
-    exector: <<parameters.platform>>
+        default: ubuntu2204
+        # This could be of type executor, but then conversion to a string is wonky :(
+        type: string 
+    executor: <<parameters.platform>>
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
@@ -52,7 +53,7 @@ jobs:
       - run:
           name: "Copy binary to workspace"
           command: |
-            mkdir -p workspace/<<parameters.version>>
+            mkdir -p workspace/<<parameters.platform>>/<<parameters.version>>
             cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.platform>>/<<parameters.version>>/
       - persist_to_workspace:
           root: workspace
@@ -76,9 +77,10 @@ jobs:
           command: |
             echo "deb https://nginx.org/packages/ubuntu/ jammy nginx" > /tmp/nginx.list
             echo "deb-src https://nginx.org/packages/ubuntu/ jammy nginx" >> /tmp/nginx.list
-            sudo cp /tmp/nginx.list /etc/apt.sources.list.d/nginx.list
+            sudo cp /tmp/nginx.list /etc/apt/sources.list.d/nginx.list
+            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ABF5BD827BD9BF62
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-<<version>>
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "nginx=<<parameters.version>>-*"
       - run:
           name: "Install nginx test dependencies"
           command: |
@@ -94,10 +96,10 @@ jobs:
             ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip
       - run:
           name: "Execute tests with akita_enable off"
-          command: "sudo -u nginx prove -v . |& tee ../nginx-plus-module-prove-test-verbose || true"
+          command: "prove -v . |& tee ../nginx-plus-module-prove-test-verbose || true"
           environment:
             TEST_NGINX_BINARY: "/usr/sbin/nginx"
-            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
+            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/ubuntu2204/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
           working_directory: "nginx-tests-tip"
       - store_artifacts:
@@ -112,11 +114,12 @@ workflows:
       - build-module:
           # Build just a single version on non-release branches
           name:
-            build-v<<matrix.version>>
+            smoke-v<<matrix.version>>-<<matrix.platform>>
           filters:
             branches:
-              not:
+              ignore:
                 - release
+                - mgritter/build_for_each_platform
           matrix:
             parameters:
               version: ["1.23.3"]
@@ -124,7 +127,7 @@ workflows:
       - build-module:
           # Build whole matrix on the release branch
           name:
-            build-v<<matrix.version>>
+            build-v<<matrix.version>>-<<matrix.platform>>
           filters:
             branches:
               only:
@@ -139,7 +142,7 @@ workflows:
           name:
             Nginx integration test using <<matrix.version>>
           requires:
-            - build-v<<matrix.version>>
+            - build-v<<matrix.version>>-ubuntu2204
           filters:
             branches:
               only:
@@ -147,4 +150,6 @@ workflows:
                 - mgritter/build_for_each_platform
           matrix:
             parameters:
-              version: ["1.23.3", "1.22.1", "1.21.6"] 
+              # 1.21.6 is not in the nginx repository, only 1.20 and 1.22
+              version: ["1.22.1"] 
+
