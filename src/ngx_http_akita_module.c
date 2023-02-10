@@ -604,8 +604,8 @@ static time_t ngx_http_akita_agent_retry_time;
 static ngx_uint_t ngx_http_akita_agent_backoff;
 
 /* Minimum and maximum backoff period, in seconds */
-static const int ngx_http_akita_agent_initial_backoff = 30;
-static const int ngx_http_akita_agent_max_backoff = 240;
+static const ngx_uint_t ngx_http_akita_agent_initial_backoff = 30;
+static const ngx_uint_t ngx_http_akita_agent_max_backoff = 240;
 
 /* Initialize the per-process backoff state */
 static ngx_int_t
