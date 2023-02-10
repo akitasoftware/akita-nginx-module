@@ -1,15 +1,15 @@
 # akita-nginx-module
 
 This module mirrors request and response data from NGINX to the Akita agent. 
-With this capability, you can see traffic that would not otherwise be visible
+With this capability, you can see and monitor traffic that would not otherwise be visible
 to the Akita agent because it is encrypted or sent over a Unix domain socket,
 and you are using NGINX as a reverse proxy.
 
 ## Getting started
 
-1. Create an account at the Akita Web Console at http://app.akita.software/
+1. Create an account on the [Akita App](http://app.akita.software/).
 
-2. In the Akita web console, go through the onboarding steps to create a project
+2. In the Akita App, go through the onboarding steps to create a project
 and an API Key.  Record this API key for the next steps.
 
 3. On the machine where you run NGINX, download the Akita agent by running our auto-install script:
@@ -17,9 +17,9 @@ and an API Key.  Record this API key for the next steps.
 bash -c "$(curl -L https://releases.akita.software/scripts/install_akita.sh)"
 ```
 
-4. Run `akita login` and enter your API key
+4. Run `akita login` and enter your API key.
 
-5. Run `akita nginx download`, which will find the version of NGINX running on your system, verify that it is supported, and download a recompiled dynamic module. 
+5. Run `akita nginx download`, which will find the version of NGINX running on your system, verify that it is supported, and download a precompiled dynamic module. 
 If no module is available for your version of NGINX, please [contact Akita](support@akitasoftware.com) or see [Building the module from source](#building-the-module-from-source).
 
 6. Run `akita nginx collect --project {your project}` which will start listening for traffic from NGINX. By default this runs on port 50080, though you can specify a different one.
@@ -32,24 +32,24 @@ If no module is available for your version of NGINX, please [contact Akita](supp
       
 8. Reload the NGINX configuration with `nginx -s reload`
 
-9. Check whether the Akita agent indicates whether traffic is successfully being captured and uploaded to the Akita cloud.  If not, please contact [support@akitasoftware.com] for assistance, including any output from the Akita agent, your NGINX configuration, and your NGINX log file.
+9. Check whether the Akita agent indicates whether traffic is successfully being captured and uploaded to the Akita cloud.  If not, please contact support@akitasoftware.com for assistance, including any output from the Akita agent, your NGINX configuration, and your NGINX log file.
 
 ### Prebuilt modules
 
 Prebuilt modules are currently available for NGINX Plus release 28 (1.23.2) and R27 (1.21.6) on the Linux x86_64 platform. 
 We also have a module for the open source NGINX version 1.22.0.  You can download this module from the [latest release](https://github.com/akitasoftware/akita-nginx-module/releases/latest) on GitHub.
 
-Please [contact Akita](support@akitasoftware.com) to request support for additional versions of NGINX!
+Please [contact Akita](mailto:support@akitasoftware.com) to request support for additional versions of NGINX!
 
 After downloading the module, install it in `/etc/nginx/modules` and create a symbolic link with the non-version-specific module name:
 
 ```
-$ sudo ln -s /etc/nginx/modules/ngx_http_akita_module_1.23.2.so /etc/nginx/modules/ngx_ahttp_akita_module.so
+$ sudo ln -s ngx_http_akita_module_1.23.2.so /etc/nginx/modules/ngx_ahttp_akita_module.so
 ```
 
 ### Building the module from source
 
-To use the Akita module with other versions of NGINX, you must compile it from source.  First determine the version of NGINX you are running.  (For NGINX Plus, this will match a corresponding release of the open-source version of NGINX.)
+To use the Akita module with other versions of NGINX, you must compile it from source.  First determine the version of NGINX you are running.  (For NGINX Plus, this will match a corresponding open-source release of NGINX.)
 
 ```
 $ nginx -v
@@ -83,7 +83,7 @@ Copy the module from the `objs` directory to `/etc/nginx/modules`:
 $ sudo cp objs/ngx_http_akita_module.so /etc/nginx/modules
 ```
 
-Then add the `load_module` directive as described in step 7 of the [Getting Started](#getting-started) instructions, or see the [Module configuration](#module-configuration) section below.
+Then add the `load_module` directive as described in step 7 of the [Getting started](#getting-started) instructions, or see the [Module configuration](#module-configuration) section below.
 
 ### Running Akita
 
