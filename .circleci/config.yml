@@ -2,30 +2,40 @@
 # See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
-# Define a job to be invoked later in a workflow.
+# Define executors based on our prebuilt images that contain the Nginx dependencies.
+# See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
+executors:
+  ubuntu2004:
+    docker:
+      - image: akitasoftware/nginx-build-ubuntu2004:latest
+    resource_class: medium
+  ubuntu2204:
+    docker:
+      - image: akitasoftware/nginx-build-ubuntu2204:latest
+    resource_class: medium
+  amazon2:
+    docker:
+      - image: akitasoftware/nginx-build-amazon2:latest
+    resource_class: medium
+
+# Define a job to be invoked later in a workflow.      
 # See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
   build-module:
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
-    machine:
-      image: ubuntu-2204:2022.10.2
-    resource_class: medium
     parameters:
       version:
         default: "1.23.3"
         type: string
+      platform:
+        default: ubuntu2204
+        # This could be of type executor, but then conversion to a string is wonky :(
+        type: string 
+    executor: <<parameters.platform>>
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
       - checkout:
-          path: "akita"
-      # TODO: build this into a custom image?
-      - run:
-          name: "Install nginx dependencies"
-          command: |
-            sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libpcre3-dev libxml2-dev uuid-dev    
+          path: "akita"      
       - run:
           name: "Download nginx <<parameters.version>>"
           command: "wget http://nginx.org/download/nginx-<<parameters.version>>.tar.gz"          
@@ -34,36 +44,46 @@ jobs:
           command: "tar -xzf nginx-<<parameters.version>>.tar.gz"
       - run:
           name: "Configure nginx"
-          command: "./configure --add-dynamic-module=../akita --with-http_ssl_module"
+          command: "./configure --add-dynamic-module=../akita --with-compat"
           working_directory: "nginx-<<parameters.version>>"
       - run:
           name: "Compile <<parameters.version>>"
-          command: "make"
+          command: "make modules"
           working_directory: "nginx-<<parameters.version>>"
       - run:
-          name: "Copy binaries to workspace"
+          name: "Copy binary to workspace"
           command: |
-            mkdir -p workspace/<<parameters.version>>
-            cp nginx-<<parameters.version>>/objs/nginx workspace/<<parameters.version>>/
-            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.version>>/
+            mkdir -p workspace/<<parameters.platform>>/<<parameters.version>>
+            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.platform>>/<<parameters.version>>/
       - persist_to_workspace:
           root: workspace
           paths:
-            - "<<parameters.version>>/nginx"
-            - "<<parameters.version>>/ngx_http_akita_module.so"
+            - "<<parameters.platform>>/<<parameters.version>>/ngx_http_akita_module.so"
+      - store_artifacts:
+          path: workspace/<<parameters.platform>>/<<parameters.version>>/ngx_http_akita_module.so 
+          destination: <<parameters.platform>>/ngx_http_akita_module_<<parameters.version>>.so
+            
   test-module:
     machine:
       image: ubuntu-2204:2022.10.2
     resource_class: medium
     parameters:
       version:
-        default: "1.23.3"
+        default: "1.21.6"
         type: string
     steps:
       - run:
-          name: "Install nginx dependencies"
+          name: "Install nginx"
           command: |
+            echo "deb https://nginx.org/packages/ubuntu/ jammy nginx" > /tmp/nginx.list
+            echo "deb-src https://nginx.org/packages/ubuntu/ jammy nginx" >> /tmp/nginx.list
+            sudo cp /tmp/nginx.list /etc/apt/sources.list.d/nginx.list
+            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ABF5BD827BD9BF62
             sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "nginx=<<parameters.version>>-*"
+      - run:
+          name: "Install nginx test dependencies"
+          command: |
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libapparmor1 libcache-memcached-fast-perl libcache-memcached-perl libcgi-compress-gzip-perl libcgi-fast-perl libcgi-pm-perl libencode-locale-perl liberror-perl libfcgi-perl libhtml-parser-perl libhtml-tagset-perl libhttp-date-perl libhttp-message-perl libio-html-perl libio-socket-ip-perl libio-socket-ssl-perl liblocale-gettext-perl liblwp-mediatypes-perl libnet-libidn-perl libnet-ssleay-perl libpcre3 libpcre3-dev libstring-crc32-perl libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl libtimedate-perl liburi-perl zlib1g zlib1g-dev
       - attach_workspace:
           at: /tmp/workspace
@@ -76,15 +96,12 @@ jobs:
             ln -s `ls -1 |  grep nginx-tests` nginx-tests-tip
       - run:
           name: "Execute tests with akita_enable off"
-          command: "prove -v . 2>&1 | tee ../nginx-plus-module-prove-test-verbose || true"
+          command: "prove -v . |& tee ../nginx-plus-module-prove-test-verbose || true"
           environment:
-            TEST_NGINX_BINARY: "/tmp/workspace/<<parameters.version>>/nginx"
-            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so;"
+            TEST_NGINX_BINARY: "/usr/sbin/nginx"
+            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/ubuntu2204/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
           working_directory: "nginx-tests-tip"
-      - store_artifacts:
-          path: /tmp/workspace/<<parameters.version>>/ngx_http_akita_module.so 
-          destination: "akita-module-<<parameters.version>>/ngx_http_akita_module.so"
       - store_artifacts:
           path: nginx-plus-module-prove-test-verbose
           destination: "nginx-test-results-<<parameters.version>>/nginx-plus-module-prove-test-verbose"
@@ -95,30 +112,41 @@ workflows:
   release-akita-module:
      jobs:
       - build-module:
+          # Build just a single version on non-release branches
           name:
-            build-v<<matrix.version>>
+            smoke-v<<matrix.version>>-<<matrix.platform>>
+          filters:
+            branches:
+              ignore:
+                - release
           matrix:
             parameters:
-              version: ["1.23.3"]   
+              version: ["1.23.3"]
+              platform: ["ubuntu2204"]
       - build-module:
+          # Build whole matrix on the release branch
           name:
-            build-v<<matrix.version>>
+            build-v<<matrix.version>>-<<matrix.platform>>
           filters:
             branches:
               only:
                 - release
           matrix:
             parameters:
-              version: ["1.22.0", "1.21.6", "1.18.0"]
+              version: ["1.23.3", "1.22.1", "1.21.6"]
+              platform: ["ubuntu2204","ubuntu2004","amazon2"]
       - test-module:
+          # Execute tests on Ubuntu 22.04 only for now  
           name:
             Nginx integration test using <<matrix.version>>
           requires:
-            - build-v<<matrix.version>>
+            - build-v<<matrix.version>>-ubuntu2204
           filters:
             branches:
               only:
                 - release
           matrix:
             parameters:
-              version: ["1.23.3", "1.22.0", "1.21.6", "1.18.0"] 
+              # 1.21.6 is not in the nginx repository, only 1.20 and 1.22
+              version: ["1.22.1"] 
+
