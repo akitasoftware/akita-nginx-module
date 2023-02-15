@@ -119,7 +119,6 @@ workflows:
             branches:
               ignore:
                 - release
-                - mgritter/build_for_each_platform
           matrix:
             parameters:
               version: ["1.23.3"]
@@ -132,7 +131,6 @@ workflows:
             branches:
               only:
                 - release
-                - mgritter/build_for_each_platform
           matrix:
             parameters:
               version: ["1.23.3", "1.22.1", "1.21.6"]
@@ -147,7 +145,6 @@ workflows:
             branches:
               only:
                 - release
-                - mgritter/build_for_each_platform
           matrix:
             parameters:
               # 1.21.6 is not in the nginx repository, only 1.20 and 1.22
