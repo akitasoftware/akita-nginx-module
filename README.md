@@ -8,7 +8,7 @@ as a reverse proxy.
 
 ## Getting started
 
-1. Create an account on the [Akita App](http://app.akita.software/).
+1. Create an account on the [Akita App](https://app.akita.software/login?sign_up).
 
 2. In the Akita App, go through the [onboarding
 steps](https://app.akita.software/onboarding) to create a project and
@@ -54,7 +54,7 @@ please [contact Akita](mailto:support@akitasoftware.com) or see
       
 8. Reload the NGINX configuration with `nginx -s reload`.
 
-9. Check whether the Akita agent indicates whether traffic is
+9. Check whether the Akita a UI indicates whether traffic is
    successfully being captured and uploaded to the Akita cloud.  If
    not, please [contact Akita](mailto:support@akitasoftware.com) for
    assistance, including any output from the Akita agent, your NGINX
@@ -264,7 +264,7 @@ its source files.)
 make
 ```
 
-To build with debug mode, SSL support, and AddressSantizer, use:
+To build with debug mode, SSL support, and AddressSanitizer, use:
 
 ```
 ./configure --add-dynamic-module=/path/to/akita-nginx-module --with-http_ssl_module --with-debug \
