@@ -169,7 +169,7 @@ workflows:
             parameters:
               # 1.21.6 is not in the nginx repository, only 1.20 and 1.22
               version: ["1.22.1"]
-      - publish-github-release:
+      - release-module:
           requires:
             - build-module
           filters:
