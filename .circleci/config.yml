@@ -56,7 +56,8 @@ jobs:
           working_directory: "nginx-<<parameters.version>>"
       - run:
           name: "Copy binary to workspace"
-          command: |          
+          command: |
+            mkdir -p workspace
             cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/$MODULE_NAME
       - persist_to_workspace:
           root: workspace
