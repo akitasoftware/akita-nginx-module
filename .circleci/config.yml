@@ -62,9 +62,9 @@ jobs:
       - persist_to_workspace:
           root: workspace
           paths:
-            - nginx_*.so
+            - ngx_http_akita_module*.so
       - store_artifacts:
-          path: ngx_http_akita_module_amd64_<<parameters.platform>>_<<parameters.version>>.so
+          path: workspace/ngx_http_akita_module_amd64_<<parameters.platform>>_<<parameters.version>>.so
           destination: amd64/<<parameters.platform>>/ngx_http_akita_module_<<parameters.version>>.so
             
   test-module:
