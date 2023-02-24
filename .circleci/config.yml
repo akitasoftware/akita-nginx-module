@@ -152,6 +152,7 @@ workflows:
             branches:
               only:
                 - release
+                - mgritter/generate_github_release
           matrix:
             parameters:
               version: ["1.23.3", "1.22.1", "1.22.0", "1.21.6", "1.18.0"]
@@ -179,4 +180,5 @@ workflows:
             branches:
               only:
                 - release
+                - mgritter/generate_github_release
 
