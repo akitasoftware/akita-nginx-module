@@ -147,6 +147,8 @@ workflows:
           # Build whole matrix on the release branch
           name:
             build-v<<matrix.version>>-<<matrix.platform>>
+          alias:
+            build-all-versions
           filters:
             branches:
               only:
@@ -171,7 +173,7 @@ workflows:
               version: ["1.22.1"]
       - release-module:
           requires:
-            - build-module
+            - build-all-versions
           filters:
             branches:
               only:
