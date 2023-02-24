@@ -5,11 +5,11 @@ version: 2.1
 # Define executors based on our prebuilt images that contain the Nginx dependencies.
 # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
 executors:
-  ubuntu_20.04:
+  ubuntu_2004:
     docker:
       - image: akitasoftware/nginx-build-ubuntu2004:latest
     resource_class: medium
-  ubuntu_22.04:
+  ubuntu_2204:
     docker:
       - image: akitasoftware/nginx-build-ubuntu2204:latest
     resource_class: medium
@@ -27,7 +27,7 @@ jobs:
         default: "1.23.3"
         type: string
       platform:
-        default: ubuntu_22.04
+        default: ubuntu_2204
         # This could be of type executor, but then conversion to a string is wonky :(
         type: string 
     executor: <<parameters.platform>>
@@ -142,7 +142,7 @@ workflows:
           matrix:
             parameters:
               version: ["1.23.3"]
-              platform: ["ubuntu_22.04"]
+              platform: ["ubuntu_2204"]
       - build-module:
           # Build whole matrix on the release branch
           name:
@@ -154,13 +154,13 @@ workflows:
           matrix:
             parameters:
               version: ["1.23.3", "1.22.1", "1.22.0", "1.21.6", "1.18.0"]
-              platform: ["ubuntu_22.04","ubuntu_20.04","amzn_2"]
+              platform: ["ubuntu_2204","ubuntu_2004","amzn_2"]
       - test-module:
           # Execute tests on Ubuntu 22.04 only for now  
           name:
             Nginx integration test using <<matrix.version>>
           requires:
-            - build-v<<matrix.version>>-ubuntu_22.04
+            - build-v<<matrix.version>>-ubuntu_2204
           filters:
             branches:
               only:
