@@ -121,7 +121,7 @@ jobs:
           at: ./artifacts
       - run:
           name: "Build GHR"
-          command: go get github.com/tcknsm/ghr
+          command: go install github.com/tcknsm/ghr@latest
       - run:
           # Fails if release already exists; bump VERSION file on the release branch in order to kick off a new release.
           name: "Create release"
