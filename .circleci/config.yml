@@ -147,8 +147,6 @@ workflows:
           # Build whole matrix on the release branch
           name:
             build-v<<matrix.version>>-<<matrix.platform>>
-          alias:
-            build-all-versions
           filters:
             branches:
               only:
@@ -157,6 +155,8 @@ workflows:
             parameters:
               version: ["1.23.3", "1.22.1", "1.22.0", "1.21.6", "1.18.0"]
               platform: ["ubuntu_2204","ubuntu_2004","amzn_2"]
+            alias:
+              build-all-versions
       - test-module:
           # Execute tests on Ubuntu 22.04 only for now  
           name:
