@@ -126,7 +126,7 @@ jobs:
           # Fails if release already exists; bump VERSION file on the release branch in order to kick off a new release.
           name: "Create release"
           command: |
-            VERSION=`cat akita/version`
+            VERSION=`cat akita/VERSION`
             echo "Releasing ${VERSION}"
             ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r {CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} ${VERSION} ./artifacts/
       
