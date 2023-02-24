@@ -158,7 +158,7 @@ workflows:
                 - mgritter/generate_github_release
           matrix:
             parameters:
-              version: ["1.23.3", "1.22.1", "1.22.0", "1.21.6"]
+              version: ["1.23.3", "1.23.2", "1.22.1", "1.22.0", "1.21.6"]
               platform: ["ubuntu_2204","ubuntu_2004","amzn_2"]
             alias:
               build-all-versions
