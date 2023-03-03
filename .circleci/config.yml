@@ -5,15 +5,15 @@ version: 2.1
 # Define executors based on our prebuilt images that contain the Nginx dependencies.
 # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
 executors:
-  ubuntu2004:
+  ubuntu_2004:
     docker:
       - image: akitasoftware/nginx-build-ubuntu2004:latest
     resource_class: medium
-  ubuntu2204:
+  ubuntu_2204:
     docker:
       - image: akitasoftware/nginx-build-ubuntu2204:latest
     resource_class: medium
-  amazon2:
+  amzn_2:
     docker:
       - image: akitasoftware/nginx-build-amazon2:latest
     resource_class: medium
@@ -27,10 +27,14 @@ jobs:
         default: "1.23.3"
         type: string
       platform:
-        default: ubuntu2204
+        default: ubuntu_2204
         # This could be of type executor, but then conversion to a string is wonky :(
         type: string 
     executor: <<parameters.platform>>
+    environment:
+      # The GitHub artifacts list is flat, so all the parameters we need have to be specified
+      # in the name of the file.
+      MODULE_NAME: ngx_http_akita_module_amd64_<<parameters.platform>>_<<parameters.version>>.so
     # Add steps to the job
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
@@ -53,15 +57,15 @@ jobs:
       - run:
           name: "Copy binary to workspace"
           command: |
-            mkdir -p workspace/<<parameters.platform>>/<<parameters.version>>
-            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/<<parameters.platform>>/<<parameters.version>>/
+            mkdir -p workspace
+            cp nginx-<<parameters.version>>/objs/ngx_http_akita_module.so workspace/$MODULE_NAME
       - persist_to_workspace:
           root: workspace
           paths:
-            - "<<parameters.platform>>/<<parameters.version>>/ngx_http_akita_module.so"
+            - ngx_http_akita_module*.so
       - store_artifacts:
-          path: workspace/<<parameters.platform>>/<<parameters.version>>/ngx_http_akita_module.so 
-          destination: <<parameters.platform>>/ngx_http_akita_module_<<parameters.version>>.so
+          path: workspace/ngx_http_akita_module_amd64_<<parameters.platform>>_<<parameters.version>>.so
+          destination: amd64/<<parameters.platform>>/ngx_http_akita_module_<<parameters.version>>.so
             
   test-module:
     machine:
@@ -99,13 +103,33 @@ jobs:
           command: "prove -v . |& tee ../nginx-plus-module-prove-test-verbose || true"
           environment:
             TEST_NGINX_BINARY: "/usr/sbin/nginx"
-            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/ubuntu2204/<<parameters.version>>/ngx_http_akita_module.so;"
+            TEST_NGINX_GLOBALS: "load_module /tmp/workspace/ubuntu_2204/<<parameters.version>>/ngx_http_akita_module.so;"
             TEST_NGINX_GLOBALS_HTTP: "akita_agent localhost:5555; akita_enable off;"
           working_directory: "nginx-tests-tip"
       - store_artifacts:
           path: nginx-plus-module-prove-test-verbose
           destination: "nginx-test-results-<<parameters.version>>/nginx-plus-module-prove-test-verbose"
 
+  release-module:
+    docker:
+      - image: cimg/go:1.20
+    resource_class: medium
+    steps:
+      - checkout:
+          path: "akita"      
+      - attach_workspace:
+          at: ./artifacts
+      - run:
+          name: "Build GHR"
+          command: go install github.com/tcnksm/ghr@latest
+      - run:
+          # Fails if release already exists; bump VERSION file on the release branch in order to kick off a new release.
+          name: "Create release"
+          command: |
+            VERSION="${cat akita/VERSION}"
+            echo "Releasing ${VERSION}"
+            ghr -t "${GITHUB_TOKEN}" -u "${CIRCLE_PROJECT_USERNAME}" -r "${CIRCLE_PROJECT_REPONAME}" -c "${CIRCLE_SHA1}" "${VERSION}" ./artifacts/
+      
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
@@ -122,7 +146,7 @@ workflows:
           matrix:
             parameters:
               version: ["1.23.3"]
-              platform: ["ubuntu2204"]
+              platform: ["ubuntu_2204"]
       - build-module:
           # Build whole matrix on the release branch
           name:
@@ -133,14 +157,16 @@ workflows:
                 - release
           matrix:
             parameters:
-              version: ["1.23.3", "1.22.1", "1.21.6"]
-              platform: ["ubuntu2204","ubuntu2004","amazon2"]
+              version: ["1.23.3", "1.23.2", "1.22.1", "1.22.0", "1.21.6"]
+              platform: ["ubuntu_2204","ubuntu_2004","amzn_2"]
+            alias:
+              build-all-versions
       - test-module:
           # Execute tests on Ubuntu 22.04 only for now  
           name:
             Nginx integration test using <<matrix.version>>
           requires:
-            - build-v<<matrix.version>>-ubuntu2204
+            - build-v<<matrix.version>>-ubuntu_2204
           filters:
             branches:
               only:
@@ -148,5 +174,12 @@ workflows:
           matrix:
             parameters:
               # 1.21.6 is not in the nginx repository, only 1.20 and 1.22
-              version: ["1.22.1"] 
+              version: ["1.22.1"]
+      - release-module:
+          requires:
+            - build-all-versions
+          filters:
+            branches:
+              only:
+                - release
 
